@@ -23,6 +23,8 @@ const requiredExtensions: [3]*align(1) const [:0]u8 = .{
     @ptrCast(vulkan.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME),
 };
 
+const MAX_FRAMES_IN_FLIGHT: usize = 2;
+
 const Allocator = std.mem.Allocator;
 const Self = @This();
 
@@ -56,10 +58,11 @@ pipelineLayout: vulkan.VkPipelineLayout,
 pipeline: vulkan.VkPipeline,
 swapChainFramebuffers: []vulkan.VkFramebuffer,
 commandPool: vulkan.VkCommandPool,
-commandBuffer: vulkan.VkCommandBuffer,
-imageAvailableSemaphore: vulkan.VkSemaphore,
-renderFinishedSemaphore: vulkan.VkSemaphore,
-inFlightFence: vulkan.VkFence,
+commandBuffers: []vulkan.VkCommandBuffer,
+imageAvailableSemaphores: []vulkan.VkSemaphore,
+renderFinishedSemaphores: []vulkan.VkSemaphore,
+inFlightFences: []vulkan.VkFence,
+currentFrame: usize = 0,
 
 pub fn new(
     vulkanInstance: Instance,
@@ -104,8 +107,8 @@ pub fn new(
 
     const commandPool = try createCommandPool(allocator, physicalDevice, device, vulkanSurface);
 
-    const commandBuffer = try createCommandBuffer(device, commandPool);
-    const imageAvailableSemaphore, const renderFinishedSemaphore, const inFlightFence = try createSyncObject(device);
+    const commandBuffers = try createCommandBuffers(allocator, device, commandPool);
+    const imageAvailableSemaphores, const renderFinishedSemaphores, const inFlightFences = try createSyncObjects(allocator, device);
     return Self{
         .allocator = allocator,
         .instance = instance,
@@ -121,18 +124,32 @@ pub fn new(
         .pipeline = pipeline,
         .swapChainFramebuffers = swapChainFramebuffers,
         .commandPool = commandPool,
-        .commandBuffer = commandBuffer,
-        .imageAvailableSemaphore = imageAvailableSemaphore,
-        .renderFinishedSemaphore = renderFinishedSemaphore,
-        .inFlightFence = inFlightFence,
+        .commandBuffers = commandBuffers,
+        .imageAvailableSemaphores = imageAvailableSemaphores,
+        .renderFinishedSemaphores = renderFinishedSemaphores,
+        .inFlightFences = inFlightFences,
     };
 }
 
 pub fn deinit(self: *const Self) !void {
     if (vulkan.VK_SUCCESS != vulkan.vkDeviceWaitIdle(self.device)) return error.VulkanError;
-    vulkan.vkDestroyFence(self.device, self.inFlightFence, null);
-    vulkan.vkDestroySemaphore(self.device, self.renderFinishedSemaphore, null);
-    vulkan.vkDestroySemaphore(self.device, self.imageAvailableSemaphore, null);
+    for (self.inFlightFences) |fence| {
+        vulkan.vkDestroyFence(self.device, fence, null);
+    }
+    self.allocator.free(self.inFlightFences);
+
+    for (self.renderFinishedSemaphores) |semaphore| {
+        vulkan.vkDestroySemaphore(self.device, semaphore, null);
+    }
+    self.allocator.free(self.renderFinishedSemaphores);
+
+    for (self.imageAvailableSemaphores) |semaphore| {
+        vulkan.vkDestroySemaphore(self.device, semaphore, null);
+    }
+    self.allocator.free(self.imageAvailableSemaphores);
+
+    self.allocator.free(self.commandBuffers);
+
     vulkan.vkDestroyCommandPool(self.device, self.commandPool, null);
 
     for (self.swapChainFramebuffers) |framebuffer| {
@@ -158,34 +175,46 @@ pub fn deinit(self: *const Self) !void {
     vulkan.vkDestroySurfaceKHR(self.instance, self.vulkanSurface, null);
 }
 
-pub fn draw(self: *const Self) !void {
-    if (vulkan.VK_SUCCESS != vulkan.vkWaitForFences(self.device, 1, &self.inFlightFence, vulkan.VK_TRUE, std.math.maxInt(u64))) return error.VulkanError;
-    if (vulkan.VK_SUCCESS != vulkan.vkResetFences(self.device, 1, &self.inFlightFence)) return error.VulkanError;
+pub fn draw(self: *Self) !void {
+    if (vulkan.VK_SUCCESS != vulkan.vkWaitForFences(self.device, 1, &self.inFlightFences[self.currentFrame], vulkan.VK_TRUE, std.math.maxInt(u64))) return error.VulkanError;
+    if (vulkan.VK_SUCCESS != vulkan.vkResetFences(self.device, 1, &self.inFlightFences[self.currentFrame])) return error.VulkanError;
 
     var imageIndex: u32 = 0;
 
-    if (vulkan.VK_SUCCESS != vulkan.vkAcquireNextImageKHR(self.device, self.swapChain, std.math.maxInt(u64), self.imageAvailableSemaphore, null, &imageIndex)) return error.VulkanError;
+    if (vulkan.VK_SUCCESS != vulkan.vkAcquireNextImageKHR(
+        self.device,
+        self.swapChain,
+        std.math.maxInt(u64),
+        self.imageAvailableSemaphores[self.currentFrame],
+        null,
+        &imageIndex,
+    )) return error.VulkanError;
 
-    try recordCommandBuffer(self.commandBuffer, self.renderPass, self.extent, self.swapChainFramebuffers[imageIndex], self.pipeline);
+    if (vulkan.VK_SUCCESS != vulkan.vkResetCommandBuffer(self.commandBuffers[self.currentFrame], 0)) return error.VulkanError;
+    try recordCommandBuffer(self.commandBuffers[self.currentFrame], self.renderPass, self.extent, self.swapChainFramebuffers[imageIndex], self.pipeline);
 
     var submitInfo = vulkan.VkSubmitInfo{};
     submitInfo.sType = vulkan.VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-    const waitSemaphores = [_]vulkan.VkSemaphore{self.imageAvailableSemaphore};
+    const waitSemaphores = [_]vulkan.VkSemaphore{self.imageAvailableSemaphores[self.currentFrame]};
     const waitStages = [_]vulkan.VkPipelineStageFlags{vulkan.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
     submitInfo.waitSemaphoreCount = waitSemaphores.len;
     submitInfo.pWaitSemaphores = &waitSemaphores;
     submitInfo.pWaitDstStageMask = &waitStages;
     submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &self.commandBuffer;
+    submitInfo.pCommandBuffers = &self.commandBuffers[
+        self.currentFrame
+    ];
 
-    const signalSemaphores = [_]vulkan.VkSemaphore{self.renderFinishedSemaphore};
+    const signalSemaphores = [_]vulkan.VkSemaphore{self.renderFinishedSemaphores[self.currentFrame]};
     submitInfo.signalSemaphoreCount = signalSemaphores.len;
     submitInfo.pSignalSemaphores = &signalSemaphores;
 
-    if (vulkan.VK_SUCCESS != vulkan.vkQueueSubmit(self.graphicQueue, 1, &submitInfo, self.inFlightFence)) {
+    if (vulkan.VK_SUCCESS != vulkan.vkQueueSubmit(self.graphicQueue, 1, &submitInfo, self.inFlightFences[self.currentFrame])) {
         return error.VulkanError;
     }
+
+    self.currentFrame = (self.currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 
     var presentInfo = vulkan.VkPresentInfoKHR{};
     presentInfo.sType = vulkan.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -826,19 +855,20 @@ fn createCommandPool(allocator: Allocator, physicalDevice: vulkan.VkPhysicalDevi
     return commandPool;
 }
 
-fn createCommandBuffer(device: vulkan.VkDevice, commandPool: vulkan.VkCommandPool) !vulkan.VkCommandBuffer {
+fn createCommandBuffers(allocator: Allocator, device: vulkan.VkDevice, commandPool: vulkan.VkCommandPool) ![]vulkan.VkCommandBuffer {
+    const commandBuffers: []vulkan.VkCommandBuffer = try allocator.alloc(vulkan.VkCommandBuffer, MAX_FRAMES_IN_FLIGHT);
+
     var allocInfo = vulkan.VkCommandBufferAllocateInfo{};
     allocInfo.sType = vulkan.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.commandPool = commandPool;
     allocInfo.level = vulkan.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandBufferCount = 1;
+    allocInfo.commandBufferCount = @intCast(commandBuffers.len);
 
-    var commandBuffer: vulkan.VkCommandBuffer = null;
-    if (vulkan.VK_SUCCESS != vulkan.vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer)) {
+    if (vulkan.VK_SUCCESS != vulkan.vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.ptr)) {
         return error.VulkanError;
     }
 
-    return commandBuffer;
+    return commandBuffers;
 }
 
 fn recordCommandBuffer(
@@ -895,23 +925,25 @@ fn recordCommandBuffer(
     }
 }
 
-fn createSyncObject(device: vulkan.VkDevice) !struct { vulkan.VkSemaphore, vulkan.VkSemaphore, vulkan.VkFence } {
+fn createSyncObjects(allocator: Allocator, device: vulkan.VkDevice) !struct { []vulkan.VkSemaphore, []vulkan.VkSemaphore, []vulkan.VkFence } {
     var semaphoreInfo = vulkan.VkSemaphoreCreateInfo{};
     semaphoreInfo.sType = vulkan.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     var fenceInfo = vulkan.VkFenceCreateInfo{};
     fenceInfo.sType = vulkan.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = vulkan.VK_FENCE_CREATE_SIGNALED_BIT;
 
-    var imageAvailableSemaphore: vulkan.VkSemaphore = null;
-    var renderFinishedSemaphore: vulkan.VkSemaphore = null;
-    var inFlightFence: vulkan.VkFence = null;
+    var imageAvailableSemaphores: []vulkan.VkSemaphore = try allocator.alloc(vulkan.VkSemaphore, MAX_FRAMES_IN_FLIGHT);
+    var renderFinishedSemaphores: []vulkan.VkSemaphore = try allocator.alloc(vulkan.VkSemaphore, MAX_FRAMES_IN_FLIGHT);
+    var inFlightFences: []vulkan.VkFence = try allocator.alloc(vulkan.VkFence, MAX_FRAMES_IN_FLIGHT);
 
-    if (vulkan.vkCreateSemaphore(device, &semaphoreInfo, null, &imageAvailableSemaphore) != vulkan.VK_SUCCESS or
-        vulkan.vkCreateSemaphore(device, &semaphoreInfo, null, &renderFinishedSemaphore) != vulkan.VK_SUCCESS or
-        vulkan.vkCreateFence(device, &fenceInfo, null, &inFlightFence) != vulkan.VK_SUCCESS)
-    {
-        return error.VulkanError;
+    for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+        if (vulkan.vkCreateSemaphore(device, &semaphoreInfo, null, &imageAvailableSemaphores[i]) != vulkan.VK_SUCCESS or
+            vulkan.vkCreateSemaphore(device, &semaphoreInfo, null, &renderFinishedSemaphores[i]) != vulkan.VK_SUCCESS or
+            vulkan.vkCreateFence(device, &fenceInfo, null, &inFlightFences[i]) != vulkan.VK_SUCCESS)
+        {
+            return error.VulkanError;
+        }
     }
 
-    return .{ imageAvailableSemaphore, renderFinishedSemaphore, inFlightFence };
+    return .{ imageAvailableSemaphores, renderFinishedSemaphores, inFlightFences };
 }

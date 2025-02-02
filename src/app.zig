@@ -93,13 +93,14 @@ pub fn dispatch(self: *Self) !void {
             self.width,
             self.height,
         );
-        try self.renderer.?.draw();
         self.recreate = false;
+
+        try self.renderer.?.draw();
 
         const frame = try self.context.surface.frame();
         frame.setListener(*Self, frameCallback, self);
     }
-    if (self.context.display.roundtrip() != .SUCCESS) return error.DispatchFailed;
+    if (self.context.display.dispatch() != .SUCCESS) return error.DispatchFailed;
 }
 
 fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *Context) void {
@@ -150,7 +151,7 @@ fn frameCallback(callback: *wl.Callback, event: wl.Callback.Event, data: *Self) 
     _ = event;
     callback.destroy();
 
-    if (data.renderer) |r| {
+    if (data.renderer) |*r| {
         r.draw() catch |e| {
             std.log.err("failed to render: {}", .{e});
         };
