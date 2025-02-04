@@ -44,6 +44,44 @@ pub const Instance = struct {
     }
 };
 
+const Vertex = struct {
+    pos: @Vector(2, f32),
+    color: @Vector(3, f32),
+
+    fn getBindingDescription() vulkan.VkVertexInputBindingDescription {
+        var bindingDescription = vulkan.VkVertexInputBindingDescription{};
+        bindingDescription.binding = 0;
+        bindingDescription.stride = @sizeOf(@This());
+        bindingDescription.inputRate = vulkan.VK_VERTEX_INPUT_RATE_VERTEX;
+
+        return bindingDescription;
+    }
+
+    fn getAttributeDescriptions() [2]vulkan.VkVertexInputAttributeDescription {
+        var attributeDescriptions: [2]vulkan.VkVertexInputAttributeDescription = .{ .{}, .{} };
+        attributeDescriptions[0].binding = 0;
+        attributeDescriptions[0].location = 0;
+        attributeDescriptions[0].format = vulkan.VK_FORMAT_R32G32_SFLOAT;
+        attributeDescriptions[0].offset = @offsetOf(Vertex, "pos");
+
+        attributeDescriptions[1].binding = 0;
+        attributeDescriptions[1].location = 1;
+        attributeDescriptions[1].format = vulkan.VK_FORMAT_R32G32B32_SFLOAT;
+        attributeDescriptions[1].offset = @offsetOf(Vertex, "color");
+
+        return attributeDescriptions;
+    }
+};
+
+const vertices = [_]Vertex{
+    .{ .pos = .{ -0.5, -0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
+    .{ .pos = .{ 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
+    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
+    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 1.0, 1.0, 1.0 } },
+};
+
+const indices = [_]u16{ 0, 1, 2, 2, 3, 0 };
+
 allocator: Allocator,
 instance: vulkan.VkInstance,
 vulkanSurface: vulkan.VkSurfaceKHR,
@@ -58,6 +96,10 @@ pipelineLayout: vulkan.VkPipelineLayout,
 pipeline: vulkan.VkPipeline,
 swapChainFramebuffers: []vulkan.VkFramebuffer,
 commandPool: vulkan.VkCommandPool,
+vertexBuffer: vulkan.VkBuffer,
+vertexBufferMemory: vulkan.VkDeviceMemory,
+indexBuffer: vulkan.VkBuffer,
+indexBufferMemory: vulkan.VkDeviceMemory,
 commandBuffers: []vulkan.VkCommandBuffer,
 imageAvailableSemaphores: []vulkan.VkSemaphore,
 renderFinishedSemaphores: []vulkan.VkSemaphore,
@@ -107,6 +149,9 @@ pub fn new(
 
     const commandPool = try createCommandPool(allocator, physicalDevice, device, vulkanSurface);
 
+    const vertexBuffer, const vertexBufferMemory = try createVertexBuffer(device, physicalDevice, commandPool, graphicQueue);
+    const indexBuffer, const indexBufferMemory = try createIndexBuffer(device, physicalDevice, commandPool, graphicQueue);
+
     const commandBuffers = try createCommandBuffers(allocator, device, commandPool);
     const imageAvailableSemaphores, const renderFinishedSemaphores, const inFlightFences = try createSyncObjects(allocator, device);
     return Self{
@@ -124,6 +169,10 @@ pub fn new(
         .pipeline = pipeline,
         .swapChainFramebuffers = swapChainFramebuffers,
         .commandPool = commandPool,
+        .vertexBuffer = vertexBuffer,
+        .vertexBufferMemory = vertexBufferMemory,
+        .indexBuffer = indexBuffer,
+        .indexBufferMemory = indexBufferMemory,
         .commandBuffers = commandBuffers,
         .imageAvailableSemaphores = imageAvailableSemaphores,
         .renderFinishedSemaphores = renderFinishedSemaphores,
@@ -133,6 +182,12 @@ pub fn new(
 
 pub fn deinit(self: *const Self) !void {
     if (vulkan.VK_SUCCESS != vulkan.vkDeviceWaitIdle(self.device)) return error.VulkanError;
+    vulkan.vkDestroyBuffer(self.device, self.vertexBuffer, null);
+    vulkan.vkFreeMemory(self.device, self.vertexBufferMemory, null);
+
+    vulkan.vkDestroyBuffer(self.device, self.indexBuffer, null);
+    vulkan.vkFreeMemory(self.device, self.indexBufferMemory, null);
+
     for (self.inFlightFences) |fence| {
         vulkan.vkDestroyFence(self.device, fence, null);
     }
@@ -191,7 +246,15 @@ pub fn draw(self: *Self) !void {
     )) return error.VulkanError;
 
     if (vulkan.VK_SUCCESS != vulkan.vkResetCommandBuffer(self.commandBuffers[self.currentFrame], 0)) return error.VulkanError;
-    try recordCommandBuffer(self.commandBuffers[self.currentFrame], self.renderPass, self.extent, self.swapChainFramebuffers[imageIndex], self.pipeline);
+    try recordCommandBuffer(
+        self.commandBuffers[self.currentFrame],
+        self.renderPass,
+        self.extent,
+        self.swapChainFramebuffers[imageIndex],
+        self.pipeline,
+        self.vertexBuffer,
+        self.indexBuffer,
+    );
 
     var submitInfo = vulkan.VkSubmitInfo{};
     submitInfo.sType = vulkan.VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -513,10 +576,10 @@ fn createSwapChain(
     createInfo.imageArrayLayers = 1;
     createInfo.imageUsage = vulkan.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-    const indices = try findQueueFamilyIndice(physicalDevice, allocator, surface);
-    const queueFamilyIndices = [_]u32{ indices.graphics.?, indices.present.? };
+    const queueIndices = try findQueueFamilyIndice(physicalDevice, allocator, surface);
+    const queueFamilyIndices = [_]u32{ queueIndices.graphics.?, queueIndices.present.? };
 
-    if (indices.graphics != indices.present) {
+    if (queueIndices.graphics != queueIndices.present) {
         createInfo.imageSharingMode = vulkan.VK_SHARING_MODE_CONCURRENT;
         createInfo.queueFamilyIndexCount = 2;
         createInfo.pQueueFamilyIndices = &queueFamilyIndices;
@@ -641,12 +704,15 @@ fn createGraphicPipeline(allocator: Allocator, device: vulkan.VkDevice, swapChai
     dynamicState.dynamicStateCount = dynamicStates.len;
     dynamicState.pDynamicStates = &dynamicStates;
 
+    const bindingDescription = Vertex.getBindingDescription();
+    const attributeDescriptions = Vertex.getAttributeDescriptions();
+
     var vertexInputInfo = vulkan.VkPipelineVertexInputStateCreateInfo{};
     vertexInputInfo.sType = vulkan.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 0;
-    vertexInputInfo.pVertexBindingDescriptions = null; // Optional
-    vertexInputInfo.vertexAttributeDescriptionCount = 0;
-    vertexInputInfo.pVertexAttributeDescriptions = null; // Optional
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+    vertexInputInfo.vertexAttributeDescriptionCount = attributeDescriptions.len;
+    vertexInputInfo.pVertexAttributeDescriptions = &attributeDescriptions;
 
     var inputAssembly = vulkan.VkPipelineInputAssemblyStateCreateInfo{};
     inputAssembly.sType = vulkan.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -877,6 +943,8 @@ fn recordCommandBuffer(
     swapChainExtent: vulkan.VkExtent2D,
     swapChainFramebuffer: vulkan.VkFramebuffer,
     graphicsPipeline: vulkan.VkPipeline,
+    vertexBuffer: vulkan.VkBuffer,
+    indexBuffer: vulkan.VkBuffer,
 ) !void {
     var beginInfo = vulkan.VkCommandBufferBeginInfo{};
     beginInfo.sType = vulkan.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -916,7 +984,12 @@ fn recordCommandBuffer(
         scissor.extent = swapChainExtent;
         vulkan.vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-        vulkan.vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+        const vertexBuffers = [_]vulkan.VkBuffer{vertexBuffer};
+        const offsets = [_]vulkan.VkDeviceSize{0};
+        vulkan.vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffers, &offsets);
+        vulkan.vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, vulkan.VK_INDEX_TYPE_UINT16);
+
+        vulkan.vkCmdDrawIndexed(commandBuffer, indices.len, 1, 0, 0, 0);
     }
     vulkan.vkCmdEndRenderPass(commandBuffer);
 
@@ -946,4 +1019,200 @@ fn createSyncObjects(allocator: Allocator, device: vulkan.VkDevice) !struct { []
     }
 
     return .{ imageAvailableSemaphores, renderFinishedSemaphores, inFlightFences };
+}
+
+pub fn createVertexBuffer(
+    device: vulkan.VkDevice,
+    physicalDevice: vulkan.VkPhysicalDevice,
+    commandPool: vulkan.VkCommandPool,
+    graphicQueue: vulkan.VkQueue,
+) !struct { vulkan.VkBuffer, vulkan.VkDeviceMemory } {
+    const bufferSize = @sizeOf(Vertex) * vertices.len;
+    const stagingBuffer, const stagingBufferMemory = try createBuffer(
+        device,
+        physicalDevice,
+        bufferSize,
+        vulkan.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        vulkan.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vulkan.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+    );
+    defer {
+        vulkan.vkDestroyBuffer(device, stagingBuffer, null);
+        vulkan.vkFreeMemory(device, stagingBufferMemory, null);
+    }
+
+    var data: [*c]u8 = undefined;
+    if (vulkan.VK_SUCCESS != vulkan.vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, @ptrCast(&data))) {
+        return error.MapMemoryFailed;
+    }
+    @memcpy(data[0..bufferSize], std.mem.asBytes(&vertices));
+    vulkan.vkUnmapMemory(device, stagingBufferMemory);
+
+    const vertexBuffer, const vertexBufferMemory = try createBuffer(
+        device,
+        physicalDevice,
+        bufferSize,
+        vulkan.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vulkan.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        vulkan.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    );
+
+    try copyBuffer(
+        device,
+        graphicQueue,
+        commandPool,
+        stagingBuffer,
+        vertexBuffer,
+        bufferSize,
+    );
+
+    return .{ vertexBuffer, vertexBufferMemory };
+}
+
+fn findMemoryType(physicalDevice: vulkan.VkPhysicalDevice, typeFilter: u32, properties: vulkan.VkMemoryPropertyFlags) !u32 {
+    var memProperties = vulkan.VkPhysicalDeviceMemoryProperties{};
+    vulkan.vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+
+    for (0..memProperties.memoryTypeCount) |i| {
+        if ((typeFilter & @shlExact(i, 2) != 0) and ((memProperties.memoryTypes[i].propertyFlags & properties) == properties)) {
+            return @intCast(i);
+        }
+    }
+
+    return error.FailedToFindMemoryType;
+}
+
+fn createBuffer(
+    device: vulkan.VkDevice,
+    physicalDevice: vulkan.VkPhysicalDevice,
+    size: usize,
+    usage: vulkan.VkBufferUsageFlags,
+    properties: vulkan.VkMemoryPropertyFlags,
+) !struct { vulkan.VkBuffer, vulkan.VkDeviceMemory } {
+    var bufferInfo = vulkan.VkBufferCreateInfo{};
+    bufferInfo.sType = vulkan.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = size;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = vulkan.VK_SHARING_MODE_EXCLUSIVE;
+
+    var vertexBuffer: vulkan.VkBuffer = null;
+    if (vulkan.VK_SUCCESS != vulkan.vkCreateBuffer(device, &bufferInfo, null, &vertexBuffer)) {
+        return error.FailedToCreateBuffer;
+    }
+
+    var memRequirements = vulkan.VkMemoryRequirements{};
+    vulkan.vkGetBufferMemoryRequirements(device, vertexBuffer, &memRequirements);
+
+    var allocInfo = vulkan.VkMemoryAllocateInfo{};
+    allocInfo.sType = vulkan.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = try findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
+
+    var vertexBufferMemory: vulkan.VkDeviceMemory = null;
+    if (vulkan.VK_SUCCESS != vulkan.vkAllocateMemory(device, &allocInfo, null, &vertexBufferMemory)) {
+        return error.VulkanAllocMemoryFailed;
+    }
+
+    if (vulkan.VK_SUCCESS != vulkan.vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0)) {
+        return error.BindBufferFailed;
+    }
+
+    return .{ vertexBuffer, vertexBufferMemory };
+}
+
+fn copyBuffer(
+    device: vulkan.VkDevice,
+    graphicQueue: vulkan.VkQueue,
+    commandPool: vulkan.VkCommandPool,
+    srcBuffer: vulkan.VkBuffer,
+    dstBuffer: vulkan.VkBuffer,
+    size: u32,
+) !void {
+    var allocInfo = vulkan.VkCommandBufferAllocateInfo{};
+    allocInfo.sType = vulkan.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = vulkan.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool = commandPool;
+    allocInfo.commandBufferCount = 1;
+
+    var commandBuffer: vulkan.VkCommandBuffer = null;
+    if (vulkan.VK_SUCCESS != vulkan.vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer)) {
+        return error.FailedToAllocateCommandBuffer;
+    }
+
+    var beginInfo = vulkan.VkCommandBufferBeginInfo{};
+    beginInfo.sType = vulkan.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = vulkan.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    if (vulkan.VK_SUCCESS != vulkan.vkBeginCommandBuffer(commandBuffer, &beginInfo)) {
+        return error.FailedToBeginCommandBuffer;
+    }
+
+    var copyRegion = vulkan.VkBufferCopy{};
+    copyRegion.srcOffset = 0; // Optional
+    copyRegion.dstOffset = 0; // Optional
+    copyRegion.size = size;
+    vulkan.vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+
+    if (vulkan.VK_SUCCESS != vulkan.vkEndCommandBuffer(commandBuffer)) {
+        return error.FailedToEndCommandBuffer;
+    }
+
+    var submitInfo = vulkan.VkSubmitInfo{};
+    submitInfo.sType = vulkan.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+
+    if (vulkan.VK_SUCCESS != vulkan.vkQueueSubmit(graphicQueue, 1, &submitInfo, null)) {
+        return error.FailedQueueSubmit;
+    }
+
+    if (vulkan.VK_SUCCESS != vulkan.vkQueueWaitIdle(graphicQueue)) {
+        return error.FailedToWaitQueue;
+    }
+
+    vulkan.vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+}
+
+fn createIndexBuffer(
+    device: vulkan.VkDevice,
+    physicalDevice: vulkan.VkPhysicalDevice,
+    commandPool: vulkan.VkCommandPool,
+    graphicQueue: vulkan.VkQueue,
+) !struct { vulkan.VkBuffer, vulkan.VkDeviceMemory } {
+    const bufferSize = @sizeOf(u16) * indices.len;
+    const stagingBuffer, const stagingBufferMemory = try createBuffer(
+        device,
+        physicalDevice,
+        bufferSize,
+        vulkan.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        vulkan.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vulkan.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+    );
+    defer {
+        vulkan.vkDestroyBuffer(device, stagingBuffer, null);
+        vulkan.vkFreeMemory(device, stagingBufferMemory, null);
+    }
+
+    var data: [*c]u8 = undefined;
+    if (vulkan.VK_SUCCESS != vulkan.vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, @ptrCast(&data))) {
+        return error.MapMemoryFailed;
+    }
+    @memcpy(data[0..bufferSize], std.mem.asBytes(&indices));
+    vulkan.vkUnmapMemory(device, stagingBufferMemory);
+
+    const indexBuffer, const indexBufferMemory = try createBuffer(
+        device,
+        physicalDevice,
+        bufferSize,
+        vulkan.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vulkan.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+        vulkan.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    );
+
+    try copyBuffer(
+        device,
+        graphicQueue,
+        commandPool,
+        stagingBuffer,
+        indexBuffer,
+        bufferSize,
+    );
+
+    return .{ indexBuffer, indexBufferMemory };
 }
