@@ -55,6 +55,10 @@
             .url = "https://github.com/ifreund/zig-wayland/archive/a507358764d209627e6a555104099b0825d8934c.zip",
             .hash = "12204339bf0ea439f92ad54e220be6d42f15431f3d1cd107fb272d0b19a43d98ab17",
         },
+        .zalgebra = .{
+            .url = "https://github.com/kooparse/zalgebra/archive/refs/heads/main.zip",
+            .hash = "1220fbbcfa859f668d69b4f7d2aa621d13b128a77b46965e6c4aae35f9c1d7b85eb8",
+        },
     },
 
     // Specifies the set of files and directories that are included in this package.

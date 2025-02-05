@@ -47,6 +47,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.root_module.addImport("wayland", wayland);
+
+    const zalgebra = b.dependency("zalgebra", .{});
+    exe.root_module.addImport("zalgebra", zalgebra.module("zalgebra"));
+
     exe.linkLibC();
     exe.linkSystemLibrary("vulkan");
     exe.linkSystemLibrary("wayland-client");
