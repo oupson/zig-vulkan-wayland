@@ -49,6 +49,7 @@ pub const Instance = struct {
 const Vertex = struct {
     pos: @Vector(2, f32),
     color: @Vector(3, f32),
+    texCoord: @Vector(2, f32),
 
     fn getBindingDescription() vulkan.VkVertexInputBindingDescription {
         var bindingDescription = vulkan.VkVertexInputBindingDescription{};
@@ -59,8 +60,8 @@ const Vertex = struct {
         return bindingDescription;
     }
 
-    fn getAttributeDescriptions() [2]vulkan.VkVertexInputAttributeDescription {
-        var attributeDescriptions: [2]vulkan.VkVertexInputAttributeDescription = .{ .{}, .{} };
+    fn getAttributeDescriptions() [3]vulkan.VkVertexInputAttributeDescription {
+        var attributeDescriptions: [3]vulkan.VkVertexInputAttributeDescription = .{ .{}, .{}, .{} };
         attributeDescriptions[0].binding = 0;
         attributeDescriptions[0].location = 0;
         attributeDescriptions[0].format = vulkan.VK_FORMAT_R32G32_SFLOAT;
@@ -70,6 +71,11 @@ const Vertex = struct {
         attributeDescriptions[1].location = 1;
         attributeDescriptions[1].format = vulkan.VK_FORMAT_R32G32B32_SFLOAT;
         attributeDescriptions[1].offset = @offsetOf(Vertex, "color");
+
+        attributeDescriptions[2].binding = 0;
+        attributeDescriptions[2].location = 2;
+        attributeDescriptions[2].format = vulkan.VK_FORMAT_R32G32_SFLOAT;
+        attributeDescriptions[2].offset = @offsetOf(Vertex, "texCoord");
 
         return attributeDescriptions;
     }
@@ -82,10 +88,10 @@ const UniformBufferObject = extern struct {
 };
 
 const vertices = [_]Vertex{
-    .{ .pos = .{ -0.5, -0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
-    .{ .pos = .{ 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
-    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
-    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 1.0, 1.0, 1.0 } },
+    .{ .pos = .{ -0.5, -0.5 }, .color = .{ 1.0, 0.0, 0.0 }, .texCoord = .{ 1.0, 0.0 } },
+    .{ .pos = .{ 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 }, .texCoord = .{ 0.0, 0.0 } },
+    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 }, .texCoord = .{ 0.0, 1.0 } },
+    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 1.0, 1.0, 1.0 }, .texCoord = .{ 1.0, 1.0 } },
 };
 
 const indices = [_]u16{ 0, 1, 2, 2, 3, 0 };
@@ -120,6 +126,10 @@ uniformBuffersMapped: [][]u8,
 startTime: std.time.Instant,
 descriptorPool: vulkan.VkDescriptorPool,
 descriptorSets: []vulkan.VkDescriptorSet,
+textureImage: vulkan.VkImage,
+textureImageMemory: vulkan.VkDeviceMemory,
+textureImageView: vulkan.VkImageView,
+textureSampler: vulkan.VkSampler,
 
 pub fn new(
     vulkanInstance: Instance,
@@ -167,12 +177,16 @@ pub fn new(
 
     const commandPool = try createCommandPool(allocator, physicalDevice, device, vulkanSurface);
 
+    const textureImage, const textureImageMemory = try createTextureImage(device, physicalDevice, commandPool, graphicQueue);
+    const textureImageView = try createTextureImageView(device, textureImage);
+    const textureSampler = try createTextureSampler(device, physicalDevice);
+
     const vertexBuffer, const vertexBufferMemory = try createVertexBuffer(device, physicalDevice, commandPool, graphicQueue);
     const indexBuffer, const indexBufferMemory = try createIndexBuffer(device, physicalDevice, commandPool, graphicQueue);
     const uniformBuffers, const uniformBuffersMemory, const uniformBuffersMapped = try createUniformBuffers(allocator, device, physicalDevice);
 
     const descriptorPool = try createDescriptorPool(device);
-    const descriptorSets = try createDescriptorSet(allocator, device, descriptorPool, uniformBuffers, descriptorSetLayout);
+    const descriptorSets = try createDescriptorSet(allocator, device, descriptorPool, uniformBuffers, descriptorSetLayout, textureImageView, textureSampler);
 
     const commandBuffers = try createCommandBuffers(allocator, device, commandPool);
     const imageAvailableSemaphores, const renderFinishedSemaphores, const inFlightFences = try createSyncObjects(allocator, device);
@@ -206,12 +220,24 @@ pub fn new(
         .startTime = try std.time.Instant.now(),
         .descriptorPool = descriptorPool,
         .descriptorSets = descriptorSets,
+        .textureImage = textureImage,
+        .textureImageMemory = textureImageMemory,
+        .textureImageView = textureImageView,
+        .textureSampler = textureSampler,
     };
 }
 
+// todo partial deinit
 pub fn deinit(self: *const Self) !void {
     std.log.info("deinit", .{});
     if (vulkan.VK_SUCCESS != vulkan.vkDeviceWaitIdle(self.device)) return error.VulkanError;
+
+    vulkan.vkDestroySampler(self.device, self.textureSampler, null);
+    vulkan.vkDestroyImageView(self.device, self.textureImageView, null);
+
+    vulkan.vkDestroyImage(self.device, self.textureImage, null);
+    vulkan.vkFreeMemory(self.device, self.textureImageMemory, null);
+
     vulkan.vkDestroyBuffer(self.device, self.vertexBuffer, null);
     vulkan.vkFreeMemory(self.device, self.vertexBufferMemory, null);
 
@@ -442,6 +468,12 @@ fn isDeviceSuitable(device: vulkan.VkPhysicalDevice, allocator: Allocator, surfa
         return false;
     }
 
+    var supportedFeatures = vulkan.VkPhysicalDeviceFeatures{};
+    vulkan.vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
+    if (supportedFeatures.samplerAnisotropy != vulkan.VK_TRUE) {
+        return false;
+    }
+
     return true;
 }
 
@@ -517,7 +549,8 @@ fn createDevice(physicalDevice: vulkan.VkPhysicalDevice, familyIndice: QueueFami
 
     const count: u32 = if (familyIndice.present.? == familyIndice.graphics.?) 1 else 2;
 
-    const deviceFeatures = vulkan.VkPhysicalDeviceFeatures{};
+    var deviceFeatures = vulkan.VkPhysicalDeviceFeatures{};
+    deviceFeatures.samplerAnisotropy = vulkan.VK_TRUE;
 
     var createInfo = vulkan.VkDeviceCreateInfo{};
     createInfo.sType = vulkan.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -694,25 +727,7 @@ fn getImageList(allocator: Allocator, device: vulkan.VkDevice, swapChain: vulkan
 fn getImageViewList(allocator: Allocator, device: vulkan.VkDevice, images: []vulkan.VkImage, imageFormat: vulkan.VkSurfaceFormatKHR) ![]vulkan.VkImageView {
     var swapChainImageViews = try allocator.alloc(vulkan.VkImageView, images.len);
     for (0..images.len) |i| {
-        var createInfo = vulkan.VkImageViewCreateInfo{};
-        createInfo.sType = vulkan.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        createInfo.image = images[i];
-
-        createInfo.viewType = vulkan.VK_IMAGE_VIEW_TYPE_2D;
-        createInfo.format = imageFormat.format;
-        createInfo.components.r = vulkan.VK_COMPONENT_SWIZZLE_IDENTITY;
-        createInfo.components.g = vulkan.VK_COMPONENT_SWIZZLE_IDENTITY;
-
-        createInfo.components.b = vulkan.VK_COMPONENT_SWIZZLE_IDENTITY;
-        createInfo.components.a = vulkan.VK_COMPONENT_SWIZZLE_IDENTITY;
-
-        createInfo.subresourceRange.aspectMask = vulkan.VK_IMAGE_ASPECT_COLOR_BIT;
-        createInfo.subresourceRange.baseMipLevel = 0;
-        createInfo.subresourceRange.levelCount = 1;
-        createInfo.subresourceRange.baseArrayLayer = 0;
-        createInfo.subresourceRange.layerCount = 1;
-
-        if (vulkan.VK_SUCCESS != vulkan.vkCreateImageView(device, &createInfo, null, &swapChainImageViews[i])) return error.VulkanError;
+        swapChainImageViews[i] = try createImageView(device, images[i], imageFormat.format);
     }
 
     return swapChainImageViews;
@@ -1185,24 +1200,7 @@ fn copyBuffer(
     dstBuffer: vulkan.VkBuffer,
     size: u32,
 ) !void {
-    var allocInfo = vulkan.VkCommandBufferAllocateInfo{};
-    allocInfo.sType = vulkan.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.level = vulkan.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandPool = commandPool;
-    allocInfo.commandBufferCount = 1;
-
-    var commandBuffer: vulkan.VkCommandBuffer = null;
-    if (vulkan.VK_SUCCESS != vulkan.vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer)) {
-        return error.FailedToAllocateCommandBuffer;
-    }
-
-    var beginInfo = vulkan.VkCommandBufferBeginInfo{};
-    beginInfo.sType = vulkan.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = vulkan.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-    if (vulkan.VK_SUCCESS != vulkan.vkBeginCommandBuffer(commandBuffer, &beginInfo)) {
-        return error.FailedToBeginCommandBuffer;
-    }
+    const commandBuffer = try beginSingleTimeCommands(device, commandPool);
 
     var copyRegion = vulkan.VkBufferCopy{};
     copyRegion.srcOffset = 0; // Optional
@@ -1210,24 +1208,7 @@ fn copyBuffer(
     copyRegion.size = size;
     vulkan.vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
 
-    if (vulkan.VK_SUCCESS != vulkan.vkEndCommandBuffer(commandBuffer)) {
-        return error.FailedToEndCommandBuffer;
-    }
-
-    var submitInfo = vulkan.VkSubmitInfo{};
-    submitInfo.sType = vulkan.VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &commandBuffer;
-
-    if (vulkan.VK_SUCCESS != vulkan.vkQueueSubmit(graphicQueue, 1, &submitInfo, null)) {
-        return error.FailedQueueSubmit;
-    }
-
-    if (vulkan.VK_SUCCESS != vulkan.vkQueueWaitIdle(graphicQueue)) {
-        return error.FailedToWaitQueue;
-    }
-
-    vulkan.vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+    try endSingleTimeCommands(device, commandPool, commandBuffer, graphicQueue);
 }
 
 fn createIndexBuffer(
@@ -1284,10 +1265,19 @@ fn createDescriptorSetLayout(device: vulkan.VkDevice) !vulkan.VkDescriptorSetLay
     uboLayoutBinding.stageFlags = vulkan.VK_SHADER_STAGE_VERTEX_BIT;
     uboLayoutBinding.pImmutableSamplers = null; // Optional
 
+    var samplerLayoutBinding = vulkan.VkDescriptorSetLayoutBinding{};
+    samplerLayoutBinding.binding = 1;
+    samplerLayoutBinding.descriptorCount = 1;
+    samplerLayoutBinding.descriptorType = vulkan.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    samplerLayoutBinding.pImmutableSamplers = null;
+    samplerLayoutBinding.stageFlags = vulkan.VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    const bindings = [_]vulkan.VkDescriptorSetLayoutBinding{ uboLayoutBinding, samplerLayoutBinding };
+
     var layoutInfo = vulkan.VkDescriptorSetLayoutCreateInfo{};
     layoutInfo.sType = vulkan.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &uboLayoutBinding;
+    layoutInfo.bindingCount = bindings.len;
+    layoutInfo.pBindings = &bindings;
 
     var descriptorSetLayout: vulkan.VkDescriptorSetLayout = null;
     if (vulkan.VK_SUCCESS != vulkan.vkCreateDescriptorSetLayout(device, &layoutInfo, null, &descriptorSetLayout)) {
@@ -1358,14 +1348,21 @@ fn updateUniformBuffer(self: *Self) !void {
 }
 
 fn createDescriptorPool(device: vulkan.VkDevice) !vulkan.VkDescriptorPool {
-    var poolSize = vulkan.VkDescriptorPoolSize{};
-    poolSize.type = vulkan.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSize.descriptorCount = MAX_FRAMES_IN_FLIGHT;
+    var poolSizes = [_]vulkan.VkDescriptorPoolSize{
+        .{
+            .type = vulkan.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+        },
+        .{
+            .type = vulkan.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+        },
+    };
 
     var poolInfo = vulkan.VkDescriptorPoolCreateInfo{};
     poolInfo.sType = vulkan.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.poolSizeCount = poolSizes.len;
+    poolInfo.pPoolSizes = &poolSizes;
     poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
 
     var descriptorPool: vulkan.VkDescriptorPool = null;
@@ -1382,6 +1379,8 @@ fn createDescriptorSet(
     descriptorPool: vulkan.VkDescriptorPool,
     uniformBuffers: []vulkan.VkBuffer,
     descriptorSetLayout: vulkan.VkDescriptorSetLayout,
+    textureImageView: vulkan.VkImageView,
+    textureSampler: vulkan.VkSampler,
 ) ![]vulkan.VkDescriptorSet {
     var layouts: [MAX_FRAMES_IN_FLIGHT]vulkan.VkDescriptorSetLayout = .{ descriptorSetLayout, descriptorSetLayout };
 
@@ -1402,18 +1401,350 @@ fn createDescriptorSet(
         bufferInfo.offset = 0;
         bufferInfo.range = @sizeOf(UniformBufferObject);
 
-        var descriptorWrite = vulkan.VkWriteDescriptorSet{};
-        descriptorWrite.sType = vulkan.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrite.dstSet = descriptorSets[i];
-        descriptorWrite.dstBinding = 0;
-        descriptorWrite.dstArrayElement = 0;
-        descriptorWrite.descriptorType = vulkan.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorWrite.descriptorCount = 1;
-        descriptorWrite.pBufferInfo = &bufferInfo;
-        descriptorWrite.pImageInfo = null; // Optional
-        descriptorWrite.pTexelBufferView = null; // Optional
+        var imageInfo = vulkan.VkDescriptorImageInfo{};
+        imageInfo.imageLayout = vulkan.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfo.imageView = textureImageView;
+        imageInfo.sampler = textureSampler;
 
-        vulkan.vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, null);
+        var descriptorWrites = [2]vulkan.VkWriteDescriptorSet{
+            .{
+                .sType = vulkan.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = descriptorSets[i],
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorType = vulkan.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = 1,
+                .pBufferInfo = &bufferInfo,
+                .pImageInfo = null, // Optional
+                .pTexelBufferView = null, // Optional
+            },
+            .{
+                .sType = vulkan.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = descriptorSets[i],
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorType = vulkan.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .pBufferInfo = null,
+                .pImageInfo = &imageInfo, // Optional
+                .pTexelBufferView = null, // Optional
+            },
+        };
+
+        vulkan.vkUpdateDescriptorSets(device, 2, &descriptorWrites, 0, null);
     }
     return descriptorSets;
+}
+
+fn createTextureImage(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDevice, commandPool: vulkan.VkCommandPool, graphicsQueue: vulkan.VkQueue) !struct { vulkan.VkImage, vulkan.VkDeviceMemory } {
+    const pixels = @embedFile("texture.rgba");
+
+    const width = 512;
+    const height = 512;
+    const channels = 4;
+
+    const bufferSize = width * height * channels;
+    const stagingBuffer, const stagingBufferMemory = try createBuffer(
+        device,
+        physicalDevice,
+        bufferSize,
+        vulkan.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        vulkan.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vulkan.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+    );
+
+    defer {
+        vulkan.vkDestroyBuffer(device, stagingBuffer, null);
+        vulkan.vkFreeMemory(device, stagingBufferMemory, null);
+    }
+
+    var data: [*c]u8 = undefined;
+    if (vulkan.VK_SUCCESS != vulkan.vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, @ptrCast(&data))) {
+        return error.MapMemoryFailed;
+    }
+    @memcpy(data[0..bufferSize], pixels);
+    vulkan.vkUnmapMemory(device, stagingBufferMemory);
+
+    const textureImage, const textureImageMemory = try createImage(
+        device,
+        physicalDevice,
+        width,
+        height,
+        vulkan.VK_FORMAT_R8G8B8A8_SRGB,
+        vulkan.VK_IMAGE_TILING_OPTIMAL,
+        vulkan.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vulkan.VK_IMAGE_USAGE_SAMPLED_BIT,
+        vulkan.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    );
+
+    try transitionImageLayout(
+        device,
+        commandPool,
+        graphicsQueue,
+        textureImage,
+        vulkan.VK_IMAGE_LAYOUT_UNDEFINED,
+        vulkan.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    );
+    try copyBufferToImage(
+        device,
+        commandPool,
+        graphicsQueue,
+        stagingBuffer,
+        textureImage,
+        width,
+        height,
+    );
+    try transitionImageLayout(
+        device,
+        commandPool,
+        graphicsQueue,
+        textureImage,
+        vulkan.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        vulkan.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    );
+
+    return .{ textureImage, textureImageMemory };
+}
+
+fn createImage(
+    device: vulkan.VkDevice,
+    physicalDevice: vulkan.VkPhysicalDevice,
+    width: u32,
+    height: u32,
+    format: vulkan.VkFormat,
+    tiling: vulkan.VkImageTiling,
+    usage: vulkan.VkImageUsageFlags,
+    properties: vulkan.VkMemoryPropertyFlags,
+) !struct { vulkan.VkImage, vulkan.VkDeviceMemory } {
+    var imageInfo = vulkan.VkImageCreateInfo{};
+    imageInfo.sType = vulkan.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = vulkan.VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = width;
+    imageInfo.extent.height = height;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = format;
+    imageInfo.tiling = tiling;
+    imageInfo.initialLayout = vulkan.VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = usage;
+    imageInfo.sharingMode = vulkan.VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.samples = vulkan.VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.flags = 0; // Optional
+
+    var textureImage: vulkan.VkImage = null;
+    if (vulkan.VK_SUCCESS != vulkan.vkCreateImage(device, &imageInfo, null, &textureImage)) {
+        return error.FailedToCreateImage;
+    }
+
+    var memRequirements = vulkan.VkMemoryRequirements{};
+    vulkan.vkGetImageMemoryRequirements(device, textureImage, &memRequirements);
+
+    var allocInfo = vulkan.VkMemoryAllocateInfo{};
+    allocInfo.sType = vulkan.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = try findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
+
+    var textureImageMemory: vulkan.VkDeviceMemory = null;
+    if (vulkan.VK_SUCCESS != vulkan.vkAllocateMemory(device, &allocInfo, null, &textureImageMemory)) {
+        return error.FailedToAllocateMemory;
+    }
+
+    if (vulkan.VK_SUCCESS != vulkan.vkBindImageMemory(device, textureImage, textureImageMemory, 0)) {
+        return error.FailedToBindMemory;
+    }
+    return .{ textureImage, textureImageMemory };
+}
+
+fn beginSingleTimeCommands(device: vulkan.VkDevice, commandPool: vulkan.VkCommandPool) !vulkan.VkCommandBuffer {
+    var allocInfo = vulkan.VkCommandBufferAllocateInfo{};
+    allocInfo.sType = vulkan.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = vulkan.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool = commandPool;
+    allocInfo.commandBufferCount = 1;
+
+    var commandBuffer: vulkan.VkCommandBuffer = null;
+    if (vulkan.VK_SUCCESS != vulkan.vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer)) {
+        return error.AllocateCommandBufferFailed;
+    }
+
+    var beginInfo = vulkan.VkCommandBufferBeginInfo{};
+    beginInfo.sType = vulkan.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = vulkan.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    if (vulkan.VK_SUCCESS != vulkan.vkBeginCommandBuffer(commandBuffer, &beginInfo)) {
+        return error.BeginCommandBufferFailed;
+    }
+
+    return commandBuffer;
+}
+
+fn endSingleTimeCommands(
+    device: vulkan.VkDevice,
+    commandPool: vulkan.VkCommandPool,
+    commandBuffer: vulkan.VkCommandBuffer,
+    graphicsQueue: vulkan.VkQueue,
+) !void {
+    if (vulkan.VK_SUCCESS != vulkan.vkEndCommandBuffer(commandBuffer)) {
+        return error.EndCommandBufferFailed;
+    }
+
+    var submitInfo = vulkan.VkSubmitInfo{};
+    submitInfo.sType = vulkan.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+
+    if (vulkan.VK_SUCCESS != vulkan.vkQueueSubmit(graphicsQueue, 1, &submitInfo, null)) {
+        return error.QueueSubmitFailed;
+    }
+    if (vulkan.VK_SUCCESS != vulkan.vkQueueWaitIdle(graphicsQueue)) {
+        return error.QueueWaitFailed;
+    }
+
+    vulkan.vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+}
+
+fn transitionImageLayout(
+    device: vulkan.VkDevice,
+    commandPool: vulkan.VkCommandPool,
+    graphicsQueue: vulkan.VkQueue,
+    image: vulkan.VkImage,
+    oldLayout: vulkan.VkImageLayout,
+    newLayout: vulkan.VkImageLayout,
+) !void {
+    const commandBuffer = try beginSingleTimeCommands(device, commandPool);
+
+    var barrier = vulkan.VkImageMemoryBarrier{};
+    barrier.sType = vulkan.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = oldLayout;
+    barrier.newLayout = newLayout;
+    barrier.srcQueueFamilyIndex = vulkan.VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = vulkan.VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = vulkan.VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+
+    var sourceStage: vulkan.VkPipelineStageFlags = undefined;
+    var destinationStage: vulkan.VkPipelineStageFlags = undefined;
+
+    if (oldLayout == vulkan.VK_IMAGE_LAYOUT_UNDEFINED and newLayout == vulkan.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = vulkan.VK_ACCESS_TRANSFER_WRITE_BIT;
+
+        sourceStage = vulkan.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        destinationStage = vulkan.VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else if (oldLayout == vulkan.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL and newLayout == vulkan.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        barrier.srcAccessMask = vulkan.VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = vulkan.VK_ACCESS_SHADER_READ_BIT;
+
+        sourceStage = vulkan.VK_PIPELINE_STAGE_TRANSFER_BIT;
+        destinationStage = vulkan.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else {
+        return error.UnsupportedLayoutTransition;
+    }
+
+    vulkan.vkCmdPipelineBarrier(
+        commandBuffer,
+        sourceStage,
+        destinationStage,
+        0,
+        0,
+        null,
+        0,
+        null,
+        1,
+        &barrier,
+    );
+
+    try endSingleTimeCommands(device, commandPool, commandBuffer, graphicsQueue);
+}
+
+fn copyBufferToImage(
+    device: vulkan.VkDevice,
+    commandPool: vulkan.VkCommandPool,
+    graphicsQueue: vulkan.VkQueue,
+    buffer: vulkan.VkBuffer,
+    image: vulkan.VkImage,
+    width: u32,
+    height: u32,
+) !void {
+    const commandBuffer = try beginSingleTimeCommands(device, commandPool);
+
+    var region = vulkan.VkBufferImageCopy{};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+
+    region.imageSubresource.aspectMask = vulkan.VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+
+    region.imageOffset = .{ .x = 0, .y = 0, .z = 0 };
+    region.imageExtent = .{ .width = width, .height = height, .depth = 1 };
+
+    vulkan.vkCmdCopyBufferToImage(
+        commandBuffer,
+        buffer,
+        image,
+        vulkan.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        1,
+        &region,
+    );
+
+    try endSingleTimeCommands(device, commandPool, commandBuffer, graphicsQueue);
+}
+
+fn createTextureImageView(device: vulkan.VkDevice, textureImage: vulkan.VkImage) !vulkan.VkImageView {
+    return createImageView(device, textureImage, vulkan.VK_FORMAT_R8G8B8A8_SRGB);
+}
+
+fn createImageView(device: vulkan.VkDevice, image: vulkan.VkImage, format: vulkan.VkFormat) !vulkan.VkImageView {
+    var viewInfo = vulkan.VkImageViewCreateInfo{};
+    viewInfo.sType = vulkan.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = image;
+    viewInfo.viewType = vulkan.VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = vulkan.VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    var imageView: vulkan.VkImageView = null;
+    if (vulkan.VK_SUCCESS != vulkan.vkCreateImageView(device, &viewInfo, null, &imageView)) {
+        return error.CreateImageViewFailed;
+    }
+
+    return imageView;
+}
+
+fn createTextureSampler(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDevice) !vulkan.VkSampler {
+    var properties = vulkan.VkPhysicalDeviceProperties{};
+    vulkan.vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+
+    var samplerInfo = vulkan.VkSamplerCreateInfo{};
+    samplerInfo.sType = vulkan.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = vulkan.VK_FILTER_LINEAR;
+    samplerInfo.minFilter = vulkan.VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = vulkan.VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = vulkan.VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeW = vulkan.VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.anisotropyEnable = vulkan.VK_TRUE;
+    samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+    samplerInfo.borderColor = vulkan.VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = vulkan.VK_FALSE;
+    samplerInfo.compareEnable = vulkan.VK_FALSE;
+    samplerInfo.compareOp = vulkan.VK_COMPARE_OP_ALWAYS;
+    samplerInfo.mipmapMode = vulkan.VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.mipLodBias = 0.0;
+    samplerInfo.minLod = 0.0;
+    samplerInfo.maxLod = 0.0;
+
+    var textureSampler: vulkan.VkSampler = null;
+    if (vulkan.VK_SUCCESS != vulkan.vkCreateSampler(device, &samplerInfo, null, &textureSampler)) {
+        return error.FailedToCreateSampler;
+    }
+    return textureSampler;
 }
