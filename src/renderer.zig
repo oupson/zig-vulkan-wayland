@@ -47,7 +47,7 @@ pub const Instance = struct {
 };
 
 const Vertex = struct {
-    pos: @Vector(2, f32),
+    pos: @Vector(3, f32),
     color: @Vector(3, f32),
     texCoord: @Vector(2, f32),
 
@@ -64,7 +64,7 @@ const Vertex = struct {
         var attributeDescriptions: [3]vulkan.VkVertexInputAttributeDescription = .{ .{}, .{}, .{} };
         attributeDescriptions[0].binding = 0;
         attributeDescriptions[0].location = 0;
-        attributeDescriptions[0].format = vulkan.VK_FORMAT_R32G32_SFLOAT;
+        attributeDescriptions[0].format = vulkan.VK_FORMAT_R32G32B32_SFLOAT;
         attributeDescriptions[0].offset = @offsetOf(Vertex, "pos");
 
         attributeDescriptions[1].binding = 0;
@@ -88,13 +88,50 @@ const UniformBufferObject = extern struct {
 };
 
 const vertices = [_]Vertex{
-    .{ .pos = .{ -0.5, -0.5 }, .color = .{ 1.0, 0.0, 0.0 }, .texCoord = .{ 1.0, 0.0 } },
-    .{ .pos = .{ 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 }, .texCoord = .{ 0.0, 0.0 } },
-    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 }, .texCoord = .{ 0.0, 1.0 } },
-    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 1.0, 1.0, 1.0 }, .texCoord = .{ 1.0, 1.0 } },
+    .{
+        .pos = .{ -0.5, -0.5, 0.0 },
+        .color = .{ 1.0, 0.0, 0.0 },
+        .texCoord = .{ 1.0, 0.0 },
+    },
+    .{
+        .pos = .{ 0.5, -0.5, 0.0 },
+        .color = .{ 0.0, 1.0, 0.0 },
+        .texCoord = .{ 0.0, 0.0 },
+    },
+    .{
+        .pos = .{ 0.5, 0.5, 0.0 },
+        .color = .{ 0.0, 0.0, 1.0 },
+        .texCoord = .{ 0.0, 1.0 },
+    },
+    .{
+        .pos = .{ -0.5, 0.5, 0.0 },
+        .color = .{ 1.0, 1.0, 1.0 },
+        .texCoord = .{ 1.0, 1.0 },
+    },
+
+    .{
+        .pos = .{ -0.5, -0.5, -0.5 },
+        .color = .{ 1.0, 0.0, 0.0 },
+        .texCoord = .{ 1.0, 0.0 },
+    },
+    .{
+        .pos = .{ 0.5, -0.5, -0.5 },
+        .color = .{ 0.0, 1.0, 0.0 },
+        .texCoord = .{ 0.0, 0.0 },
+    },
+    .{
+        .pos = .{ 0.5, 0.5, -0.5 },
+        .color = .{ 0.0, 0.0, 1.0 },
+        .texCoord = .{ 0.0, 1.0 },
+    },
+    .{
+        .pos = .{ -0.5, 0.5, -0.5 },
+        .color = .{ 1.0, 1.0, 1.0 },
+        .texCoord = .{ 1.0, 1.0 },
+    },
 };
 
-const indices = [_]u16{ 0, 1, 2, 2, 3, 0 };
+const indices = [_]u16{ 0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4 };
 
 allocator: Allocator,
 instance: vulkan.VkInstance,
@@ -130,6 +167,9 @@ textureImage: vulkan.VkImage,
 textureImageMemory: vulkan.VkDeviceMemory,
 textureImageView: vulkan.VkImageView,
 textureSampler: vulkan.VkSampler,
+depthImage: vulkan.VkImage,
+depthImageMemory: vulkan.VkDeviceMemory,
+depthImageView: vulkan.VkImageView,
 
 pub fn new(
     vulkanInstance: Instance,
@@ -170,12 +210,27 @@ pub fn new(
 
     const descriptorSetLayout = try createDescriptorSetLayout(device);
 
-    const renderPass = try createRenderPass(device, format.format);
+    const renderPass = try createRenderPass(device, physicalDevice, format.format);
     const pipelineLayout, const pipeline = try createGraphicPipeline(allocator, device, extent, renderPass, descriptorSetLayout);
 
-    const swapChainFramebuffers = try createFramebuffers(allocator, device, imageViewList, renderPass, extent);
-
     const commandPool = try createCommandPool(allocator, physicalDevice, device, vulkanSurface);
+
+    const depthImage, const depthImageMemory, const depthImageView = try createDepthResources(
+        device,
+        physicalDevice,
+        commandPool,
+        graphicQueue,
+        extent,
+    );
+
+    const swapChainFramebuffers = try createFramebuffers(
+        allocator,
+        device,
+        imageViewList,
+        renderPass,
+        extent,
+        depthImageView,
+    );
 
     const textureImage, const textureImageMemory = try createTextureImage(device, physicalDevice, commandPool, graphicQueue);
     const textureImageView = try createTextureImageView(device, textureImage);
@@ -224,6 +279,9 @@ pub fn new(
         .textureImageMemory = textureImageMemory,
         .textureImageView = textureImageView,
         .textureSampler = textureSampler,
+        .depthImage = depthImage,
+        .depthImageMemory = depthImageMemory,
+        .depthImageView = depthImageView,
     };
 }
 
@@ -231,6 +289,10 @@ pub fn new(
 pub fn deinit(self: *const Self) !void {
     std.log.info("deinit", .{});
     if (vulkan.VK_SUCCESS != vulkan.vkDeviceWaitIdle(self.device)) return error.VulkanError;
+
+    vulkan.vkDestroyImageView(self.device, self.depthImageView, null);
+    vulkan.vkDestroyImage(self.device, self.depthImage, null);
+    vulkan.vkFreeMemory(self.device, self.depthImageMemory, null);
 
     vulkan.vkDestroySampler(self.device, self.textureSampler, null);
     vulkan.vkDestroyImageView(self.device, self.textureImageView, null);
@@ -727,7 +789,7 @@ fn getImageList(allocator: Allocator, device: vulkan.VkDevice, swapChain: vulkan
 fn getImageViewList(allocator: Allocator, device: vulkan.VkDevice, images: []vulkan.VkImage, imageFormat: vulkan.VkSurfaceFormatKHR) ![]vulkan.VkImageView {
     var swapChainImageViews = try allocator.alloc(vulkan.VkImageView, images.len);
     for (0..images.len) |i| {
-        swapChainImageViews[i] = try createImageView(device, images[i], imageFormat.format);
+        swapChainImageViews[i] = try createImageView(device, images[i], imageFormat.format, vulkan.VK_IMAGE_ASPECT_COLOR_BIT);
     }
 
     return swapChainImageViews;
@@ -854,6 +916,18 @@ fn createGraphicPipeline(allocator: Allocator, device: vulkan.VkDevice, swapChai
         return error.VulkanError;
     }
 
+    var depthStencil = vulkan.VkPipelineDepthStencilStateCreateInfo{};
+    depthStencil.sType = vulkan.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = vulkan.VK_TRUE;
+    depthStencil.depthWriteEnable = vulkan.VK_TRUE;
+    depthStencil.depthCompareOp = vulkan.VK_COMPARE_OP_LESS;
+    depthStencil.depthBoundsTestEnable = vulkan.VK_FALSE;
+    depthStencil.minDepthBounds = 0.0; // Optional
+    depthStencil.maxDepthBounds = 1.0; // Optional
+    depthStencil.stencilTestEnable = vulkan.VK_FALSE;
+    depthStencil.front = .{}; // Optional
+    depthStencil.back = .{}; // Optional
+
     var pipelineInfo = vulkan.VkGraphicsPipelineCreateInfo{};
     pipelineInfo.sType = vulkan.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipelineInfo.stageCount = shaderStages.len;
@@ -863,7 +937,7 @@ fn createGraphicPipeline(allocator: Allocator, device: vulkan.VkDevice, swapChai
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
-    pipelineInfo.pDepthStencilState = null; // Optional
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = pipelineLayout;
@@ -897,7 +971,7 @@ fn createShaderModule(allocator: Allocator, device: vulkan.VkDevice, code: [:0]c
     return module;
 }
 
-fn createRenderPass(device: vulkan.VkDevice, swapChainImageFormat: vulkan.VkFormat) !vulkan.VkRenderPass {
+fn createRenderPass(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDevice, swapChainImageFormat: vulkan.VkFormat) !vulkan.VkRenderPass {
     var colorAttachment = vulkan.VkAttachmentDescription{};
     colorAttachment.format = swapChainImageFormat;
     colorAttachment.samples = vulkan.VK_SAMPLE_COUNT_1_BIT;
@@ -912,23 +986,39 @@ fn createRenderPass(device: vulkan.VkDevice, swapChainImageFormat: vulkan.VkForm
     colorAttachmentRef.attachment = 0;
     colorAttachmentRef.layout = vulkan.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+    var depthAttachment = vulkan.VkAttachmentDescription{};
+    depthAttachment.format = try findDepthFormat(physicalDevice);
+    depthAttachment.samples = vulkan.VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.loadOp = vulkan.VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = vulkan.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.stencilLoadOp = vulkan.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttachment.stencilStoreOp = vulkan.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.initialLayout = vulkan.VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttachment.finalLayout = vulkan.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    var depthAttachmentRef = vulkan.VkAttachmentReference{};
+    depthAttachmentRef.attachment = 1;
+    depthAttachmentRef.layout = vulkan.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
     var subpass = vulkan.VkSubpassDescription{};
     subpass.pipelineBindPoint = vulkan.VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorAttachmentRef;
+    subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
     var dependency = vulkan.VkSubpassDependency{};
     dependency.srcSubpass = vulkan.VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
-    dependency.srcStageMask = vulkan.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcStageMask = vulkan.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | vulkan.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     dependency.srcAccessMask = 0;
-    dependency.dstStageMask = vulkan.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.dstAccessMask = vulkan.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependency.dstStageMask = vulkan.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | vulkan.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.dstAccessMask = vulkan.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | vulkan.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    var attachments = [_]vulkan.VkAttachmentDescription{ colorAttachment, depthAttachment };
 
     var renderPassInfo = vulkan.VkRenderPassCreateInfo{};
     renderPassInfo.sType = vulkan.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &colorAttachment;
+    renderPassInfo.attachmentCount = attachments.len;
+    renderPassInfo.pAttachments = &attachments;
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
     renderPassInfo.dependencyCount = 1;
@@ -946,11 +1036,12 @@ fn createFramebuffers(
     swapChainImageViews: []vulkan.VkImageView,
     renderPass: vulkan.VkRenderPass,
     swapChainExtent: vulkan.VkExtent2D,
+    depthImageView: vulkan.VkImageView,
 ) ![]vulkan.VkFramebuffer {
     const swapChainFramebuffers = try allocator.alloc(vulkan.VkFramebuffer, swapChainImageViews.len);
 
     for (swapChainImageViews, 0..) |imageView, i| {
-        var attachments = [_]vulkan.VkImageView{imageView};
+        var attachments = [_]vulkan.VkImageView{ imageView, depthImageView };
 
         var framebufferInfo = vulkan.VkFramebufferCreateInfo{};
         framebufferInfo.sType = vulkan.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -1026,9 +1117,12 @@ fn recordCommandBuffer(
     renderPassInfo.renderArea.offset = .{ .x = 0, .y = 0 };
     renderPassInfo.renderArea.extent = swapChainExtent;
 
-    const clearColor: vulkan.VkClearValue = .{ .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } } };
-    renderPassInfo.clearValueCount = 1;
-    renderPassInfo.pClearValues = &clearColor;
+    const clearValues = [_]vulkan.VkClearValue{
+        .{ .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } } },
+        .{ .depthStencil = .{ .depth = 1.0, .stencil = 0.0 } },
+    };
+    renderPassInfo.clearValueCount = clearValues.len;
+    renderPassInfo.pClearValues = &clearValues;
 
     vulkan.vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, vulkan.VK_SUBPASS_CONTENTS_INLINE);
 
@@ -1480,6 +1574,7 @@ fn createTextureImage(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysical
         commandPool,
         graphicsQueue,
         textureImage,
+        vulkan.VK_FORMAT_R8G8B8A8_SRGB,
         vulkan.VK_IMAGE_LAYOUT_UNDEFINED,
         vulkan.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
     );
@@ -1497,6 +1592,7 @@ fn createTextureImage(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysical
         commandPool,
         graphicsQueue,
         textureImage,
+        vulkan.VK_FORMAT_R8G8B8A8_SRGB,
         vulkan.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         vulkan.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     );
@@ -1607,6 +1703,7 @@ fn transitionImageLayout(
     commandPool: vulkan.VkCommandPool,
     graphicsQueue: vulkan.VkQueue,
     image: vulkan.VkImage,
+    format: vulkan.VkFormat,
     oldLayout: vulkan.VkImageLayout,
     newLayout: vulkan.VkImageLayout,
 ) !void {
@@ -1640,8 +1737,24 @@ fn transitionImageLayout(
 
         sourceStage = vulkan.VK_PIPELINE_STAGE_TRANSFER_BIT;
         destinationStage = vulkan.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else if (oldLayout == vulkan.VK_IMAGE_LAYOUT_UNDEFINED and newLayout == vulkan.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = vulkan.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | vulkan.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+        sourceStage = vulkan.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        destinationStage = vulkan.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     } else {
         return error.UnsupportedLayoutTransition;
+    }
+
+    if (newLayout == vulkan.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+        barrier.subresourceRange.aspectMask = vulkan.VK_IMAGE_ASPECT_DEPTH_BIT;
+
+        if (hasStencilComponent(format)) {
+            barrier.subresourceRange.aspectMask |= vulkan.VK_IMAGE_ASPECT_STENCIL_BIT;
+        }
+    } else {
+        barrier.subresourceRange.aspectMask = vulkan.VK_IMAGE_ASPECT_COLOR_BIT;
     }
 
     vulkan.vkCmdPipelineBarrier(
@@ -1697,16 +1810,21 @@ fn copyBufferToImage(
 }
 
 fn createTextureImageView(device: vulkan.VkDevice, textureImage: vulkan.VkImage) !vulkan.VkImageView {
-    return createImageView(device, textureImage, vulkan.VK_FORMAT_R8G8B8A8_SRGB);
+    return createImageView(device, textureImage, vulkan.VK_FORMAT_R8G8B8A8_SRGB, vulkan.VK_IMAGE_ASPECT_COLOR_BIT);
 }
 
-fn createImageView(device: vulkan.VkDevice, image: vulkan.VkImage, format: vulkan.VkFormat) !vulkan.VkImageView {
+fn createImageView(
+    device: vulkan.VkDevice,
+    image: vulkan.VkImage,
+    format: vulkan.VkFormat,
+    aspectFlags: vulkan.VkImageAspectFlags,
+) !vulkan.VkImageView {
     var viewInfo = vulkan.VkImageViewCreateInfo{};
     viewInfo.sType = vulkan.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = image;
     viewInfo.viewType = vulkan.VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = format;
-    viewInfo.subresourceRange.aspectMask = vulkan.VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.aspectMask = aspectFlags;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = 0;
@@ -1747,4 +1865,70 @@ fn createTextureSampler(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysic
         return error.FailedToCreateSampler;
     }
     return textureSampler;
+}
+
+fn createDepthResources(
+    device: vulkan.VkDevice,
+    physicalDevice: vulkan.VkPhysicalDevice,
+    commandPool: vulkan.VkCommandPool,
+    graphicsQueue: vulkan.VkQueue,
+    swapChainExtent: vulkan.VkExtent2D,
+) !struct { vulkan.VkImage, vulkan.VkDeviceMemory, vulkan.VkImageView } {
+    const depthFormat = try findDepthFormat(physicalDevice);
+    const depthImage, const depthImageMemory = try createImage(
+        device,
+        physicalDevice,
+        swapChainExtent.width,
+        swapChainExtent.height,
+        depthFormat,
+        vulkan.VK_IMAGE_TILING_OPTIMAL,
+        vulkan.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        vulkan.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    );
+
+    const depthImageView = try createImageView(device, depthImage, depthFormat, vulkan.VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    try transitionImageLayout(
+        device,
+        commandPool,
+        graphicsQueue,
+        depthImage,
+        depthFormat,
+        vulkan.VK_IMAGE_LAYOUT_UNDEFINED,
+        vulkan.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    );
+
+    return .{ depthImage, depthImageMemory, depthImageView };
+}
+
+fn findSupportedFormat(
+    physicalDevice: vulkan.VkPhysicalDevice,
+    candidates: []vulkan.VkFormat,
+    tiling: vulkan.VkImageTiling,
+    features: vulkan.VkFormatFeatureFlags,
+) !vulkan.VkFormat {
+    for (candidates) |format| {
+        var props = vulkan.VkFormatProperties{};
+        vulkan.vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &props);
+        if (tiling == vulkan.VK_IMAGE_TILING_LINEAR and (props.linearTilingFeatures & features) == features) {
+            return format;
+        } else if (tiling == vulkan.VK_IMAGE_TILING_OPTIMAL and (props.optimalTilingFeatures & features) == features) {
+            return format;
+        }
+    }
+    return error.FailedToFindFormat;
+}
+
+fn findDepthFormat(physicalDevice: vulkan.VkPhysicalDevice) !vulkan.VkFormat {
+    var formats = [_]vulkan.VkFormat{ vulkan.VK_FORMAT_D32_SFLOAT, vulkan.VK_FORMAT_D32_SFLOAT_S8_UINT, vulkan.VK_FORMAT_D24_UNORM_S8_UINT };
+    return findSupportedFormat(
+        physicalDevice,
+        &formats,
+        vulkan.VK_IMAGE_TILING_OPTIMAL,
+        vulkan.VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT,
+    );
+}
+
+fn hasStencilComponent(format: vulkan.VkFormat) bool {
+    return format == vulkan.VK_FORMAT_D32_SFLOAT_S8_UINT or format == vulkan.VK_FORMAT_D24_UNORM_S8_UINT;
 }
