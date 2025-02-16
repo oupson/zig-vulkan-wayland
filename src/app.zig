@@ -112,9 +112,18 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *
                 context.shm = registry.bind(global.name, wl.Shm, 1) catch return;
             } else if (mem.orderZ(u8, global.interface, xdg.WmBase.interface.name) == .eq) {
                 context.wm_base = registry.bind(global.name, xdg.WmBase, 1) catch return;
+                context.wm_base.?.setListener(?*anyopaque, wmBaseListener, null);
             }
         },
         .global_remove => {},
+    }
+}
+
+fn wmBaseListener(wm_base: *xdg.WmBase, event: xdg.WmBase.Event, _: ?*anyopaque) void {
+    switch (event) {
+        .ping => |ping| {
+            wm_base.pong(ping.serial);
+        },
     }
 }
 
@@ -132,12 +141,14 @@ fn xdgSurfaceListener(xdg_surface: *xdg.Surface, event: xdg.Surface.Event, surfa
 fn xdgToplevelListener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, app: *Self) void {
     switch (event) {
         .configure => |configure| {
-            if (app.width != configure.width or app.height != configure.height) {
-                app.width = configure.width;
-                app.height = configure.height;
+            const newWidth = if (configure.width == 0) 640 else configure.width;
+            const newHeight = if (configure.height == 0) 400 else configure.height;
+            if (app.width != newWidth or app.height != newHeight) {
+                app.width = newWidth;
+                app.height = newHeight;
                 app.recreate = true;
             }
-            std.log.debug("xdg top level configure {}x{}", .{ configure.width, configure.height });
+            std.log.debug("xdg top level configure {}x{}", .{ app.width, app.height });
         },
         .wm_capabilities => {},
         .configure_bounds => {},
@@ -151,12 +162,12 @@ fn frameCallback(callback: *wl.Callback, event: wl.Callback.Event, data: *Self) 
     _ = event;
     callback.destroy();
 
+    const frame = data.context.surface.frame() catch return;
+    frame.setListener(*Self, frameCallback, data);
+
     if (data.renderer) |*r| {
         r.draw() catch |e| {
             std.log.err("failed to render: {}", .{e});
         };
     }
-
-    const frame = data.context.surface.frame() catch return;
-    frame.setListener(*Self, frameCallback, data);
 }
