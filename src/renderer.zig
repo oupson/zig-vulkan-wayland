@@ -1240,7 +1240,7 @@ fn findMemoryType(physicalDevice: vulkan.VkPhysicalDevice, typeFilter: u32, prop
     vulkan.vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
 
     for (0..memProperties.memoryTypeCount) |i| {
-        if ((typeFilter & @shlExact(i, 2) != 0) and ((memProperties.memoryTypes[i].propertyFlags & properties) == properties)) {
+        if ((typeFilter & @shlExact(i, 1) != 0) and ((memProperties.memoryTypes[i].propertyFlags & properties) == properties)) {
             return @intCast(i);
         }
     }
