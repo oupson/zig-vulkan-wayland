@@ -5,6 +5,7 @@ const posix = std.posix;
 const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const xdg = wayland.client.xdg;
+const zxdg = wayland.client.zxdg;
 
 const Allocator = std.mem.Allocator;
 const Renderer = @import("renderer.zig");
@@ -18,6 +19,8 @@ const Context = struct {
     surface: *wl.Surface = undefined,
     xdg_surface: *xdg.Surface = undefined,
     xdg_top_level: *xdg.Toplevel = undefined,
+    zxdg_decoration_manager: ?*zxdg.DecorationManagerV1 = null,
+    zxdg_decoration: ?*zxdg.ToplevelDecorationV1 = null,
 };
 
 allocator: Allocator,
@@ -63,6 +66,11 @@ pub fn connect(self: *Self) !void {
     self.context.xdg_surface.setListener(*wl.Surface, xdgSurfaceListener, self.context.surface);
     self.context.xdg_top_level.setListener(*Self, xdgToplevelListener, self);
 
+    if (self.context.zxdg_decoration_manager) |dec| {
+        self.context.zxdg_decoration = try dec.getToplevelDecoration(self.context.xdg_top_level);
+        self.context.zxdg_decoration.?.setMode(.server_side);
+    }
+
     self.context.surface.commit();
     if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
 }
@@ -72,6 +80,12 @@ pub fn deinit(self: *Self) void {
         r.deinit() catch |e| {
             std.log.err("failed to deinit renderer: {}", .{e});
         };
+    }
+    if (self.context.zxdg_decoration) |dec| {
+        dec.destroy();
+    }
+    if (self.context.zxdg_decoration_manager) |manager| {
+        manager.destroy();
     }
     self.context.xdg_top_level.destroy();
     self.context.xdg_surface.destroy();
@@ -106,6 +120,7 @@ pub fn dispatch(self: *Self) !void {
 fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *Context) void {
     switch (event) {
         .global => |global| {
+            std.log.debug("registry interface : {s}", .{global.interface});
             if (mem.orderZ(u8, global.interface, wl.Compositor.interface.name) == .eq) {
                 context.compositor = registry.bind(global.name, wl.Compositor, 1) catch return;
             } else if (mem.orderZ(u8, global.interface, wl.Shm.interface.name) == .eq) {
@@ -113,6 +128,8 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *
             } else if (mem.orderZ(u8, global.interface, xdg.WmBase.interface.name) == .eq) {
                 context.wm_base = registry.bind(global.name, xdg.WmBase, 1) catch return;
                 context.wm_base.?.setListener(?*anyopaque, wmBaseListener, null);
+            } else if (mem.orderZ(u8, global.interface, zxdg.DecorationManagerV1.interface.name) == .eq) {
+                context.zxdg_decoration_manager = registry.bind(global.name, zxdg.DecorationManagerV1, 1) catch return;
             }
         },
         .global_remove => {},
