@@ -88,50 +88,148 @@ const UniformBufferObject = extern struct {
 };
 
 const vertices = [_]Vertex{
+    // bottom
     .{
-        .pos = .{ -0.5, -0.5, 0.0 },
+        .pos = .{ -0.5, -0.5, 0.5 },
         .color = .{ 1.0, 0.0, 0.0 },
-        .texCoord = .{ 1.0, 0.0 },
-    },
-    .{
-        .pos = .{ 0.5, -0.5, 0.0 },
-        .color = .{ 0.0, 1.0, 0.0 },
         .texCoord = .{ 0.0, 0.0 },
     },
     .{
-        .pos = .{ 0.5, 0.5, 0.0 },
-        .color = .{ 0.0, 0.0, 1.0 },
-        .texCoord = .{ 0.0, 1.0 },
-    },
-    .{
-        .pos = .{ -0.5, 0.5, 0.0 },
-        .color = .{ 1.0, 1.0, 1.0 },
-        .texCoord = .{ 1.0, 1.0 },
-    },
-
-    .{
-        .pos = .{ -0.5, -0.5, -0.5 },
-        .color = .{ 1.0, 0.0, 0.0 },
-        .texCoord = .{ 1.0, 0.0 },
+        .pos = .{ 0.5, -0.5, 0.5 },
+        .color = .{ 0.0, 1.0, 0.0 },
+        .texCoord = .{ 0.5, 0.0 },
     },
     .{
         .pos = .{ 0.5, -0.5, -0.5 },
-        .color = .{ 0.0, 1.0, 0.0 },
+        .color = .{ 0.0, 0.0, 1.0 },
+        .texCoord = .{ 0.5, 1.0 },
+    },
+    .{
+        .pos = .{ -0.5, -0.5, -0.5 },
+        .color = .{ 1.0, 1.0, 1.0 },
+        .texCoord = .{ 0.0, 1.0 },
+    },
+    // top
+    .{
+        .pos = .{ -0.5, 0.5, 0.5 },
+        .color = .{ 1.0, 0.0, 0.0 },
         .texCoord = .{ 0.0, 0.0 },
+    },
+    .{
+        .pos = .{ 0.5, 0.5, 0.5 },
+        .color = .{ 0.0, 1.0, 0.0 },
+        .texCoord = .{ 0.5, 0.0 },
     },
     .{
         .pos = .{ 0.5, 0.5, -0.5 },
         .color = .{ 0.0, 0.0, 1.0 },
-        .texCoord = .{ 0.0, 1.0 },
+        .texCoord = .{ 0.5, 1.0 },
     },
     .{
         .pos = .{ -0.5, 0.5, -0.5 },
+        .color = .{ 1.0, 1.0, 1.0 },
+        .texCoord = .{ 0.0, 1.0 },
+    },
+    // north 8-11
+    .{
+        .pos = .{ -0.5, -0.5, 0.5 },
+        .color = .{ 1.0, 0.0, 0.0 },
+        .texCoord = .{ 0.5, 1.0 },
+    },
+    .{
+        .pos = .{ -0.5, 0.5, 0.5 },
+        .color = .{ 0.0, 1.0, 0.0 },
+        .texCoord = .{ 0.5, 0.0 },
+    },
+    .{
+        .pos = .{ 0.5, 0.5, 0.5 },
+        .color = .{ 0.0, 0.0, 1.0 },
+        .texCoord = .{ 1.0, 0.0 },
+    },
+    .{
+        .pos = .{ 0.5, -0.5, 0.5 },
+        .color = .{ 1.0, 1.0, 1.0 },
+        .texCoord = .{ 1.0, 1.0 },
+    },
+    // east 12-15
+    .{
+        .pos = .{ 0.5, -0.5, -0.5 },
+        .color = .{ 1.0, 0.0, 0.0 },
+        .texCoord = .{ 1.0, 1.0 },
+    },
+    .{
+        .pos = .{ 0.5, 0.5, -0.5 },
+        .color = .{ 0.0, 1.0, 0.0 },
+        .texCoord = .{ 1.0, 0.0 },
+    },
+    .{
+        .pos = .{ 0.5, 0.5, 0.5 },
+        .color = .{ 0.0, 0.0, 1.0 },
+        .texCoord = .{ 0.5, 0.0 },
+    },
+    .{
+        .pos = .{ 0.5, -0.5, 0.5 },
+        .color = .{ 1.0, 1.0, 1.0 },
+        .texCoord = .{ 0.5, 1.0 },
+    },
+    // south 16-19
+    .{
+        .pos = .{ -0.5, -0.5, -0.5 },
+        .color = .{ 1.0, 0.0, 0.0 },
+        .texCoord = .{ 1.0, 1.0 },
+    },
+    .{
+        .pos = .{ -0.5, 0.5, -0.5 },
+        .color = .{ 0.0, 1.0, 0.0 },
+        .texCoord = .{ 1.0, 0.0 },
+    },
+    .{
+        .pos = .{ 0.5, 0.5, -0.5 },
+        .color = .{ 0.0, 0.0, 1.0 },
+        .texCoord = .{ 0.5, 0.0 },
+    },
+    .{
+        .pos = .{ 0.5, -0.5, -0.5 },
+        .color = .{ 1.0, 1.0, 1.0 },
+        .texCoord = .{ 0.5, 1.0 },
+    },
+    // 20-23
+    .{
+        .pos = .{ -0.5, -0.5, -0.5 },
+        .color = .{ 1.0, 0.0, 0.0 },
+        .texCoord = .{ 0.5, 1.0 },
+    },
+    .{
+        .pos = .{ -0.5, 0.5, -0.5 },
+        .color = .{ 0.0, 1.0, 0.0 },
+        .texCoord = .{ 0.5, 0.0 },
+    },
+    .{
+        .pos = .{ -0.5, 0.5, 0.5 },
+        .color = .{ 0.0, 0.0, 1.0 },
+        .texCoord = .{ 1.0, 0.0 },
+    },
+    .{
+        .pos = .{ -0.5, -0.5, 0.5 },
         .color = .{ 1.0, 1.0, 1.0 },
         .texCoord = .{ 1.0, 1.0 },
     },
 };
 
-const indices = [_]u16{ 0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4 };
+const indices = [_]u16{
+    // bottom
+    0,  2,  3,  0,  1,  2,
+    // top
+    4,  7,  6,  4,  6,  5,
+    // north
+    8,  9,  10, 10, 11, 8,
+    // east
+    13, 12, 14, 14, 12, 15,
+    // south
+    16, 18, 17, 18, 16, 19,
+    // west
+    20, 21, 22, 22, 23, 20,
+};
 
 allocator: Allocator,
 instance: vulkan.VkInstance,
@@ -1421,8 +1519,8 @@ fn updateUniformBuffer(self: *Self) !void {
 
     const Mat4 = zalgebra.Mat4;
     const Vector3 = zalgebra.GenericVector(3, f32);
-    const model = Mat4.identity().rotate(ellapsed * 90.0, Vector3.new(0.0, 0.0, 1.0));
-    const view = Mat4.lookAt(Vector3.new(2, 2, 2), Vector3.new(0, 0, 0), Vector3.new(0, 0, 1));
+    const model = Mat4.identity().rotate(ellapsed * 90.0, Vector3.new(0.0, 1.0, 1.0));
+    const view = Mat4.lookAt(Vector3.new(4, 0, 0), Vector3.new(0, 0, 0), Vector3.new(0, 1, 0));
     var proj = Mat4.perspective(
         45,
         @as(f32, @floatFromInt(self.extent.width)) / @as(f32, @floatFromInt(self.extent.height)),
@@ -1430,7 +1528,7 @@ fn updateUniformBuffer(self: *Self) !void {
         10.0,
     );
 
-    proj.data[1][1] *= -1;
+    proj.data[1][1] *= 1;
 
     var ubo = UniformBufferObject{
         .view = view,
@@ -1531,10 +1629,10 @@ fn createDescriptorSet(
 }
 
 fn createTextureImage(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDevice, commandPool: vulkan.VkCommandPool, graphicsQueue: vulkan.VkQueue) !struct { vulkan.VkImage, vulkan.VkDeviceMemory } {
-    const pixels = @embedFile("texture.rgba");
+    const pixels = @embedFile("stone.rgba");
 
-    const width = 512;
-    const height = 512;
+    const width = 256;
+    const height = 128;
     const channels = 4;
 
     const bufferSize = width * height * channels;
