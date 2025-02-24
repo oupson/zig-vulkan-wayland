@@ -6,7 +6,7 @@ const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const xdg = wayland.client.xdg;
 const zxdg = wayland.client.zxdg;
-
+const zwp = wayland.client.zwp;
 const Allocator = std.mem.Allocator;
 const Renderer = @import("renderer.zig");
 
@@ -21,6 +21,13 @@ const Context = struct {
     xdg_top_level: *xdg.Toplevel = undefined,
     zxdg_decoration_manager: ?*zxdg.DecorationManagerV1 = null,
     zxdg_decoration: ?*zxdg.ToplevelDecorationV1 = null,
+    seat: *wl.Seat = undefined,
+    pointer: ?*wl.Pointer = null,
+    pointer_constraint: *zwp.PointerConstraintsV1 = undefined,
+    locked_pointer: ?*zwp.LockedPointerV1 = null,
+    relative_pointer_manager: *zwp.RelativePointerManagerV1 = undefined,
+    relative_pointer: ?*zwp.RelativePointerV1 = null,
+    keyboard: ?*wl.Keyboard = null,
 };
 
 allocator: Allocator,
@@ -31,6 +38,7 @@ width: i32 = 0,
 height: i32 = 0,
 recreate: bool = false,
 renderer: ?Renderer = null,
+camera: Renderer.Camera = .{},
 
 const Self = @This();
 
@@ -52,7 +60,7 @@ pub fn connect(self: *Self) !void {
     self.context.display = display;
     self.context.registry = registry;
 
-    registry.setListener(*Context, registryListener, &self.context);
+    registry.setListener(*Self, registryListener, self);
     if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
 
     //const shm = context.shm orelse return error.NoWlShm;
@@ -72,6 +80,7 @@ pub fn connect(self: *Self) !void {
     }
 
     self.context.surface.commit();
+
     if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
 }
 
@@ -81,6 +90,21 @@ pub fn deinit(self: *Self) void {
             std.log.err("failed to deinit renderer: {}", .{e});
         };
     }
+    if (self.context.relative_pointer) |pointer| {
+        pointer.destroy();
+    }
+    self.context.relative_pointer_manager.destroy();
+    if (self.context.locked_pointer) |p| {
+        p.destroy();
+    }
+    self.context.pointer_constraint.destroy();
+    if (self.context.pointer) |pointer| {
+        pointer.release();
+    }
+    if (self.context.keyboard) |keyboard| {
+        keyboard.release();
+    }
+    self.context.seat.destroy();
     if (self.context.zxdg_decoration) |dec| {
         dec.destroy();
     }
@@ -109,7 +133,7 @@ pub fn dispatch(self: *Self) !void {
         );
         self.recreate = false;
 
-        try self.renderer.?.draw();
+        try self.renderer.?.draw(&self.camera);
 
         const frame = try self.context.surface.frame();
         frame.setListener(*Self, frameCallback, self);
@@ -117,7 +141,8 @@ pub fn dispatch(self: *Self) !void {
     if (self.context.display.dispatch() != .SUCCESS) return error.DispatchFailed;
 }
 
-fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *Context) void {
+fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, data: *Self) void {
+    var context = &data.context;
     switch (event) {
         .global => |global| {
             std.log.debug("registry interface : {s}", .{global.interface});
@@ -130,6 +155,13 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, context: *
                 context.wm_base.?.setListener(?*anyopaque, wmBaseListener, null);
             } else if (mem.orderZ(u8, global.interface, zxdg.DecorationManagerV1.interface.name) == .eq) {
                 context.zxdg_decoration_manager = registry.bind(global.name, zxdg.DecorationManagerV1, 1) catch return;
+            } else if (mem.orderZ(u8, global.interface, wl.Seat.interface.name) == .eq) {
+                context.seat = registry.bind(global.name, wl.Seat, 8) catch return;
+                context.seat.setListener(*Self, wlSeatListener, data);
+            } else if (mem.orderZ(u8, global.interface, zwp.PointerConstraintsV1.interface.name) == .eq) {
+                context.pointer_constraint = registry.bind(global.name, zwp.PointerConstraintsV1, 1) catch return;
+            } else if (mem.orderZ(u8, global.interface, zwp.RelativePointerManagerV1.interface.name) == .eq) {
+                context.relative_pointer_manager = registry.bind(global.name, zwp.RelativePointerManagerV1, 1) catch return;
             }
         },
         .global_remove => {},
@@ -183,8 +215,60 @@ fn frameCallback(callback: *wl.Callback, event: wl.Callback.Event, data: *Self) 
     frame.setListener(*Self, frameCallback, data);
 
     if (data.renderer) |*r| {
-        r.draw() catch |e| {
+        r.draw(&data.camera) catch |e| {
             std.log.err("failed to render: {}", .{e});
         };
+    }
+}
+
+fn wlSeatListener(seat: *wl.Seat, event: wl.Seat.Event, data: *Self) void {
+    _ = seat;
+    switch (event) {
+        .name => |name| {
+            std.log.debug("seat name : {s}", .{name.name});
+        },
+        .capabilities => |capabilities| {
+            std.log.debug("seat capabilities : pointer = {}, keyboard = {}, touch = {}", .{
+                capabilities.capabilities.pointer,
+                capabilities.capabilities.keyboard,
+                capabilities.capabilities.touch,
+            });
+            if (capabilities.capabilities.pointer and data.context.pointer == null) {
+                // todo: multiple
+                data.context.pointer = data.context.seat.getPointer() catch unreachable;
+                data.context.pointer.?.setListener(*Self, wlPointerListener, data);
+                data.context.locked_pointer = data.context.pointer_constraint.lockPointer(data.context.surface, data.context.pointer.?, null, .persistent) catch unreachable;
+                data.context.relative_pointer = data.context.relative_pointer_manager.getRelativePointer(data.context.pointer.?) catch unreachable; //todo
+                data.context.relative_pointer.?.setListener(*Self, relativePointerListener, data);
+            }
+        },
+    }
+}
+
+fn wlPointerListener(pointer: *wl.Pointer, event: wl.Pointer.Event, data: *Self) void {
+    _ = pointer;
+    //std.log.debug("{any} {any}", .{ event, data.camera });
+    switch (event) {
+        .enter => |enter| {
+            data.context.pointer.?.setCursor(enter.serial, null, 0, 0);
+        },
+        .leave => |_| {},
+        .motion => {},
+        .button => |_| {},
+        .axis => |_| {},
+        .frame => {},
+        .axis_source => |_| {},
+        .axis_stop => |_| {},
+        .axis_discrete => |_| {},
+        .axis_value120 => |_| {},
+    }
+}
+fn relativePointerListener(relative_pointer_v1: *zwp.RelativePointerV1, event: zwp.RelativePointerV1.Event, data: *Self) void {
+    _ = relative_pointer_v1;
+    switch (event) {
+        .relative_motion => |motion| {
+            data.camera.yaw += @floatCast(motion.dx_unaccel.toDouble() * 0.1);
+            data.camera.pitch += @floatCast(motion.dy_unaccel.toDouble() * 0.1);
+        },
     }
 }

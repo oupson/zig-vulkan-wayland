@@ -35,12 +35,17 @@ pub fn build(b: *std.Build) void {
 
     scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
     scanner.addSystemProtocol("unstable/xdg-decoration/xdg-decoration-unstable-v1.xml");
+    scanner.addSystemProtocol("unstable/pointer-constraints/pointer-constraints-unstable-v1.xml");
+    scanner.addSystemProtocol("unstable/relative-pointer/relative-pointer-unstable-v1.xml");
 
     scanner.generate("wl_compositor", 1);
     scanner.generate("wl_shm", 1);
     scanner.generate("xdg_wm_base", 6);
     scanner.generate("wl_output", 4);
     scanner.generate("zxdg_decoration_manager_v1", 1);
+    scanner.generate("wl_seat", 8);
+    scanner.generate("zwp_pointer_constraints_v1", 1);
+    scanner.generate("zwp_relative_pointer_manager_v1", 1);
 
     const exe = b.addExecutable(.{
         .name = "zvulk",

@@ -30,6 +30,11 @@ const MAX_FRAMES_IN_FLIGHT: usize = 2;
 const Allocator = std.mem.Allocator;
 const Self = @This();
 
+pub const Camera = struct {
+    yaw: f32 = 0,
+    pitch: f32 = 0,
+};
+
 pub const Instance = struct {
     instance: vulkan.VkInstance,
 
@@ -459,7 +464,7 @@ pub fn deinit(self: *const Self) !void {
     vulkan.vkDestroySurfaceKHR(self.instance, self.vulkanSurface, null);
 }
 
-pub fn draw(self: *Self) !void {
+pub fn draw(self: *Self, camera: *Camera) !void {
     if (vulkan.VK_SUCCESS != vulkan.vkWaitForFences(self.device, 1, &self.inFlightFences[self.currentFrame], vulkan.VK_TRUE, std.math.maxInt(u64))) return error.VulkanError;
     if (vulkan.VK_SUCCESS != vulkan.vkResetFences(self.device, 1, &self.inFlightFences[self.currentFrame])) return error.VulkanError;
 
@@ -474,7 +479,7 @@ pub fn draw(self: *Self) !void {
         &imageIndex,
     )) return error.VulkanError;
 
-    try self.updateUniformBuffer();
+    try self.updateUniformBuffer(camera);
 
     if (vulkan.VK_SUCCESS != vulkan.vkResetCommandBuffer(self.commandBuffers[self.currentFrame], 0)) return error.VulkanError;
     try recordCommandBuffer(
@@ -1512,15 +1517,24 @@ fn createUniformBuffers(allocator: Allocator, device: vulkan.VkDevice, physicalD
     return .{ uniformBuffers, uniformBuffersMemory, uniformBuffersMapped };
 }
 
-fn updateUniformBuffer(self: *Self) !void {
+fn updateUniformBuffer(self: *Self, camera: *Camera) !void {
     const now = try std.time.Instant.now();
-
-    const ellapsed: f32 = @as(f32, @floatFromInt(now.since(self.startTime))) / 1_000_000_000.0;
-
     const Mat4 = zalgebra.Mat4;
     const Vector3 = zalgebra.GenericVector(3, f32);
-    const model = Mat4.identity().rotate(ellapsed * 90.0, Vector3.new(0.0, 1.0, 1.0));
-    const view = Mat4.lookAt(Vector3.new(4, 0, 0), Vector3.new(0, 0, 0), Vector3.new(0, 1, 0));
+    const ellapsed: f32 = @as(f32, @floatFromInt(now.since(self.startTime))) / 10_000_000.0;
+
+    const up = Vector3.new(0.0, 1.0, 0.0);
+
+    const model = Mat4.identity().rotate(ellapsed, up);
+
+    const yaw = std.math.degreesToRadians(camera.yaw);
+    const pitch = std.math.degreesToRadians(camera.pitch);
+    const x = std.math.cos(yaw) * std.math.cos(pitch);
+    const y = std.math.sin(pitch);
+    const z = std.math.sin(yaw) * std.math.cos(pitch);
+
+    const pos = Vector3.new(-4, 0, 0);
+    const view = Mat4.lookAt(pos, Vector3.new(x, y, z).norm().add(pos), up);
     var proj = Mat4.perspective(
         45,
         @as(f32, @floatFromInt(self.extent.width)) / @as(f32, @floatFromInt(self.extent.height)),
