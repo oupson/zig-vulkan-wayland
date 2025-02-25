@@ -132,12 +132,11 @@ pub fn dispatch(self: *Self) !void {
             self.height,
         );
         self.recreate = false;
-
-        try self.renderer.?.draw(&self.camera);
-
-        const frame = try self.context.surface.frame();
-        frame.setListener(*Self, frameCallback, self);
     }
+
+
+    try self.renderer.?.draw(&self.camera);
+
     if (self.context.display.dispatch() != .SUCCESS) return error.DispatchFailed;
 }
 
@@ -204,20 +203,6 @@ fn xdgToplevelListener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, app: *Self) 
         .close => {
             app.running = false;
         },
-    }
-}
-
-fn frameCallback(callback: *wl.Callback, event: wl.Callback.Event, data: *Self) void {
-    _ = event;
-    callback.destroy();
-
-    const frame = data.context.surface.frame() catch return;
-    frame.setListener(*Self, frameCallback, data);
-
-    if (data.renderer) |*r| {
-        r.draw(&data.camera) catch |e| {
-            std.log.err("failed to render: {}", .{e});
-        };
     }
 }
 
