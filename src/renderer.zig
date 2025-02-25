@@ -25,6 +25,7 @@ const requiredExtensions: [3]*align(1) const [:0]u8 = .{
     @ptrCast(vulkan.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME),
 };
 
+const MAILBOX: bool = false;
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 const Allocator = std.mem.Allocator;
@@ -862,7 +863,7 @@ fn chooseSwapSurfaceFormat(availableFormats: []vulkan.VkSurfaceFormatKHR) vulkan
 
 fn chooseSwapPresentMode(availablePresentModes: []vulkan.VkPresentModeKHR) vulkan.VkPresentModeKHR {
     for (availablePresentModes) |m| {
-        if (m == vulkan.VK_PRESENT_MODE_MAILBOX_KHR) {
+        if (m == vulkan.VK_PRESENT_MODE_MAILBOX_KHR and MAILBOX) {
             return m;
         }
     }
