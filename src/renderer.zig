@@ -34,6 +34,9 @@ const Self = @This();
 pub const Camera = struct {
     yaw: f32 = 0,
     pitch: f32 = 0,
+    x: f32 = -4,
+    y: f32 = 0,
+    z: f32 = 0,
 };
 
 pub const Instance = struct {
@@ -264,7 +267,6 @@ descriptorSetLayout: vulkan.VkDescriptorSetLayout,
 uniformBuffers: []vulkan.VkBuffer,
 uniformBuffersMemory: []vulkan.VkDeviceMemory,
 uniformBuffersMapped: [][]u8,
-startTime: std.time.Instant,
 descriptorPool: vulkan.VkDescriptorPool,
 descriptorSets: []vulkan.VkDescriptorSet,
 textureImage: vulkan.VkImage,
@@ -376,7 +378,6 @@ pub fn new(
         .renderFinishedSemaphores = renderFinishedSemaphores,
         .inFlightFences = inFlightFences,
         .descriptorSetLayout = descriptorSetLayout,
-        .startTime = try std.time.Instant.now(),
         .descriptorPool = descriptorPool,
         .descriptorSets = descriptorSets,
         .textureImage = textureImage,
@@ -1521,14 +1522,12 @@ fn createUniformBuffers(allocator: Allocator, device: vulkan.VkDevice, physicalD
 }
 
 fn updateUniformBuffer(self: *Self, camera: *Camera) !void {
-    const now = try std.time.Instant.now();
     const Mat4 = zalgebra.Mat4;
     const Vector3 = zalgebra.GenericVector(3, f32);
-    const ellapsed: f32 = @as(f32, @floatFromInt(now.since(self.startTime))) / 10_000_000.0;
 
     const up = Vector3.new(0.0, 1.0, 0.0);
 
-    const model = Mat4.identity().rotate(ellapsed, up);
+    const model = Mat4.identity().rotate(0, up);
 
     const yaw = std.math.degreesToRadians(camera.yaw);
     const pitch = std.math.degreesToRadians(camera.pitch);
@@ -1536,7 +1535,7 @@ fn updateUniformBuffer(self: *Self, camera: *Camera) !void {
     const y = std.math.sin(pitch);
     const z = std.math.sin(yaw) * std.math.cos(pitch);
 
-    const pos = Vector3.new(-4, 0, 0);
+    const pos = Vector3.new(camera.x, camera.y, camera.z);
     const view = Mat4.lookAt(pos, Vector3.new(x, y, z).norm().add(pos), up);
     var proj = Mat4.perspective(
         45,

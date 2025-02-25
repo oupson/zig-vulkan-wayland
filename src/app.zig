@@ -9,6 +9,7 @@ const zxdg = wayland.client.zxdg;
 const zwp = wayland.client.zwp;
 const Allocator = std.mem.Allocator;
 const Renderer = @import("renderer.zig");
+const Keyboard = @import("keyboard.zig");
 
 const Context = struct {
     shm: ?*wl.Shm = null,
@@ -28,6 +29,12 @@ const Context = struct {
     relative_pointer_manager: *zwp.RelativePointerManagerV1 = undefined,
     relative_pointer: ?*zwp.RelativePointerV1 = null,
     keyboard: ?*wl.Keyboard = null,
+    keyboardParser: Keyboard = undefined,
+    keyboard_state: struct {
+        forward: i32 = 0,
+        right: i32 = 0,
+        up: i32 = 0,
+    } = .{},
 };
 
 allocator: Allocator,
@@ -38,6 +45,7 @@ width: i32 = 0,
 height: i32 = 0,
 recreate: bool = false,
 renderer: ?Renderer = null,
+lastFrame: std.time.Instant,
 camera: Renderer.Camera = .{},
 
 const Self = @This();
@@ -48,6 +56,7 @@ pub fn init(allocator: Allocator) !Self {
         .allocator = allocator,
         .vulkanInstance = vulkanInstance,
         .running = true,
+        .lastFrame = try std.time.Instant.now(),
     };
 
     return self;
@@ -90,6 +99,7 @@ pub fn deinit(self: *Self) void {
             std.log.err("failed to deinit renderer: {}", .{e});
         };
     }
+    self.context.keyboardParser.deinit();
     if (self.context.relative_pointer) |pointer| {
         pointer.destroy();
     }
@@ -134,6 +144,24 @@ pub fn dispatch(self: *Self) !void {
         self.recreate = false;
     }
 
+    const lastFrame = self.lastFrame;
+    self.lastFrame = try std.time.Instant.now();
+
+    const deltaTime: f32 = @floatCast(@as(f64, @floatFromInt(self.lastFrame.since(lastFrame))) / 1000000000.0);
+
+    const camera = &self.camera;
+    const keyboard_state = &self.context.keyboard_state;
+
+    const yaw = std.math.degreesToRadians(camera.yaw);
+    const forward = @as(f32, @floatFromInt(keyboard_state.forward));
+    const right = @as(f32, @floatFromInt(keyboard_state.right));
+
+    const x = std.math.cos(yaw) * forward + std.math.sin(-yaw) * right;
+    const z = std.math.sin(yaw) * forward + std.math.cos(-yaw) * right;
+
+    camera.x += @as(f32, x) * deltaTime; // very bad idea
+    camera.y += @as(f32, @floatFromInt(keyboard_state.up)) * deltaTime; // very bad idea
+    camera.z += @as(f32, z) * deltaTime; // very bad idea
 
     try self.renderer.?.draw(&self.camera);
 
@@ -226,6 +254,12 @@ fn wlSeatListener(seat: *wl.Seat, event: wl.Seat.Event, data: *Self) void {
                 data.context.relative_pointer = data.context.relative_pointer_manager.getRelativePointer(data.context.pointer.?) catch unreachable; //todo
                 data.context.relative_pointer.?.setListener(*Self, relativePointerListener, data);
             }
+
+            if (capabilities.capabilities.keyboard and data.context.keyboard == null) {
+                data.context.keyboard = data.context.seat.getKeyboard() catch unreachable;
+                data.context.keyboardParser = Keyboard.init() catch unreachable;
+                data.context.keyboard.?.setListener(*Self, wlKeyboardListener, data);
+            }
         },
     }
 }
@@ -255,5 +289,62 @@ fn relativePointerListener(relative_pointer_v1: *zwp.RelativePointerV1, event: z
             data.camera.yaw += @floatCast(motion.dx_unaccel.toDouble() * 0.1);
             data.camera.pitch += @floatCast(motion.dy_unaccel.toDouble() * 0.1);
         },
+    }
+}
+fn wlKeyboardListener(keyboard: *wl.Keyboard, event: wl.Keyboard.Event, data: *Self) void {
+    _ = keyboard;
+    switch (event) {
+        .keymap => |keymap| {
+            if (keymap.format == .xkb_v1) {
+                data.context.keyboardParser.parseKeymap(keymap.fd, keymap.size) catch unreachable;
+            } else {
+                std.log.warn("unknown keymap : {}", .{keymap.format});
+            }
+        },
+        .enter => |e| {
+            const keys = e.keys.slice(u32);
+            for (keys) |key| {
+                const xkbKey = Keyboard.toLower(data.context.keyboardParser.parseKeyCode(key));
+                std.log.debug("{} {} {}", .{ true, xkbKey, data.context.keyboard_state });
+                switch (xkbKey) {
+                    Keyboard.xkbcommon.XKB_KEY_w => data.context.keyboard_state.forward += 1,
+                    Keyboard.xkbcommon.XKB_KEY_s => data.context.keyboard_state.forward -= 1,
+                    Keyboard.xkbcommon.XKB_KEY_d => data.context.keyboard_state.right += 1,
+                    Keyboard.xkbcommon.XKB_KEY_a => data.context.keyboard_state.right -= 1,
+                    Keyboard.xkbcommon.XKB_KEY_space => data.context.keyboard_state.up -= 1,
+                    Keyboard.xkbcommon.XKB_KEY_Shift_L => data.context.keyboard_state.up += 1,
+                    else => {},
+                }
+            }
+        },
+        .leave => {},
+        .key => |key| {
+            const xkbKey = Keyboard.toLower(data.context.keyboardParser.parseKeyCode(key.key));
+            if (key.state == .released) {
+                switch (xkbKey) {
+                    Keyboard.xkbcommon.XKB_KEY_w => data.context.keyboard_state.forward -= 1,
+                    Keyboard.xkbcommon.XKB_KEY_s => data.context.keyboard_state.forward += 1,
+                    Keyboard.xkbcommon.XKB_KEY_d => data.context.keyboard_state.right -= 1,
+                    Keyboard.xkbcommon.XKB_KEY_a => data.context.keyboard_state.right += 1,
+                    Keyboard.xkbcommon.XKB_KEY_space => data.context.keyboard_state.up += 1,
+                    Keyboard.xkbcommon.XKB_KEY_Shift_L => data.context.keyboard_state.up -= 1,
+                    else => {},
+                }
+            } else {
+                switch (xkbKey) {
+                    Keyboard.xkbcommon.XKB_KEY_w => data.context.keyboard_state.forward += 1,
+                    Keyboard.xkbcommon.XKB_KEY_s => data.context.keyboard_state.forward -= 1,
+                    Keyboard.xkbcommon.XKB_KEY_d => data.context.keyboard_state.right += 1,
+                    Keyboard.xkbcommon.XKB_KEY_a => data.context.keyboard_state.right -= 1,
+                    Keyboard.xkbcommon.XKB_KEY_space => data.context.keyboard_state.up -= 1,
+                    Keyboard.xkbcommon.XKB_KEY_Shift_L => data.context.keyboard_state.up += 1,
+                    else => {},
+                }
+            }
+        },
+        .modifiers => |modifiers| {
+            data.context.keyboardParser.setModifier(modifiers.mods_depressed, modifiers.mods_latched, modifiers.mods_locked, modifiers.group);
+        },
+        .repeat_info => {},
     }
 }
