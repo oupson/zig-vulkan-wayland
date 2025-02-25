@@ -467,7 +467,6 @@ pub fn deinit(self: *const Self) !void {
 
 pub fn draw(self: *Self, camera: *Camera) !void {
     if (vulkan.VK_SUCCESS != vulkan.vkWaitForFences(self.device, 1, &self.inFlightFences[self.currentFrame], vulkan.VK_TRUE, std.math.maxInt(u64))) return error.VulkanError;
-    if (vulkan.VK_SUCCESS != vulkan.vkResetFences(self.device, 1, &self.inFlightFences[self.currentFrame])) return error.VulkanError;
 
     var imageIndex: u32 = 0;
 
@@ -481,6 +480,8 @@ pub fn draw(self: *Self, camera: *Camera) !void {
     )) return error.VulkanError;
 
     try self.updateUniformBuffer(camera);
+
+    if (vulkan.VK_SUCCESS != vulkan.vkResetFences(self.device, 1, &self.inFlightFences[self.currentFrame])) return error.VulkanError;
 
     if (vulkan.VK_SUCCESS != vulkan.vkResetCommandBuffer(self.commandBuffers[self.currentFrame], 0)) return error.VulkanError;
     try recordCommandBuffer(
@@ -503,6 +504,7 @@ pub fn draw(self: *Self, camera: *Camera) !void {
     submitInfo.waitSemaphoreCount = waitSemaphores.len;
     submitInfo.pWaitSemaphores = &waitSemaphores;
     submitInfo.pWaitDstStageMask = &waitStages;
+
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &self.commandBuffers[
         self.currentFrame
@@ -515,8 +517,6 @@ pub fn draw(self: *Self, camera: *Camera) !void {
     if (vulkan.VK_SUCCESS != vulkan.vkQueueSubmit(self.graphicQueue, 1, &submitInfo, self.inFlightFences[self.currentFrame])) {
         return error.VulkanError;
     }
-
-    self.currentFrame = (self.currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 
     var presentInfo = vulkan.VkPresentInfoKHR{};
     presentInfo.sType = vulkan.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -533,6 +533,8 @@ pub fn draw(self: *Self, camera: *Camera) !void {
     if (vulkan.VK_SUCCESS != vulkan.vkQueuePresentKHR(self.presentQueue, &presentInfo)) {
         return error.VulkanError;
     }
+
+    self.currentFrame = (self.currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 fn createInstance(allocator: Allocator) !vulkan.VkInstance {
