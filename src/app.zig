@@ -159,9 +159,9 @@ pub fn dispatch(self: *Self) !void {
     const x = std.math.cos(yaw) * forward + std.math.sin(-yaw) * right;
     const z = std.math.sin(yaw) * forward + std.math.cos(-yaw) * right;
 
-    camera.x += @as(f32, x) * deltaTime; // very bad idea
-    camera.y += @as(f32, @floatFromInt(keyboard_state.up)) * deltaTime; // very bad idea
-    camera.z += @as(f32, z) * deltaTime; // very bad idea
+    camera.x += @as(f32, x) * deltaTime;
+    camera.y += @as(f32, @floatFromInt(keyboard_state.up)) * deltaTime;
+    camera.z += @as(f32, z) * deltaTime;
 
     try self.renderer.?.draw(&self.camera);
 
