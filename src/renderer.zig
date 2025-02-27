@@ -277,6 +277,9 @@ textureSampler: vulkan.VkSampler,
 depthImage: vulkan.VkImage,
 depthImageMemory: vulkan.VkDeviceMemory,
 depthImageView: vulkan.VkImageView,
+colorImage: vulkan.VkImage,
+colorImageMemory: vulkan.VkDeviceMemory,
+colorImageView: vulkan.VkImageView,
 
 pub fn new(
     vulkanInstance: Instance,
@@ -290,7 +293,7 @@ pub fn new(
     const instance = vulkanInstance.instance;
     const vulkanSurface = try createSurface(instance, display, surface);
 
-    const physicalDevice = try getPhysicalDevice(instance, allocator, vulkanSurface);
+    const physicalDevice, const msaaSamples = try getPhysicalDevice(instance, allocator, vulkanSurface);
 
     const familyIndice = try findQueueFamilyIndice(physicalDevice, allocator, vulkanSurface);
 
@@ -317,10 +320,25 @@ pub fn new(
 
     const descriptorSetLayout = try createDescriptorSetLayout(device);
 
-    const renderPass = try createRenderPass(device, physicalDevice, format.format);
-    const pipelineLayout, const pipeline = try createGraphicPipeline(allocator, device, extent, renderPass, descriptorSetLayout);
+    const renderPass = try createRenderPass(device, physicalDevice, format.format, msaaSamples);
+    const pipelineLayout, const pipeline = try createGraphicPipeline(
+        allocator,
+        device,
+        extent,
+        renderPass,
+        descriptorSetLayout,
+        msaaSamples,
+    );
 
     const commandPool = try createCommandPool(allocator, physicalDevice, device, vulkanSurface);
+
+    const colorImage, const colorImageMemory, const colorImageView = try createColorResources(
+        device,
+        physicalDevice,
+        extent,
+        format.format,
+        msaaSamples,
+    );
 
     const depthImage, const depthImageMemory, const depthImageView = try createDepthResources(
         device,
@@ -328,6 +346,7 @@ pub fn new(
         commandPool,
         graphicQueue,
         extent,
+        msaaSamples,
     );
 
     const swapChainFramebuffers = try createFramebuffers(
@@ -337,6 +356,7 @@ pub fn new(
         renderPass,
         extent,
         depthImageView,
+        colorImageView,
     );
 
     const textureImage, const textureImageMemory, const mipLevels = try createTextureImage(device, physicalDevice, commandPool, graphicQueue);
@@ -388,6 +408,9 @@ pub fn new(
         .depthImage = depthImage,
         .depthImageMemory = depthImageMemory,
         .depthImageView = depthImageView,
+        .colorImage = colorImage,
+        .colorImageMemory = colorImageMemory,
+        .colorImageView = colorImageView,
     };
 }
 
@@ -395,6 +418,10 @@ pub fn new(
 pub fn deinit(self: *const Self) !void {
     std.log.info("deinit", .{});
     if (vulkan.VK_SUCCESS != vulkan.vkDeviceWaitIdle(self.device)) return error.VulkanError;
+
+    vulkan.vkDestroyImageView(self.device, self.colorImageView, null);
+    vulkan.vkDestroyImage(self.device, self.colorImage, null);
+    vulkan.vkFreeMemory(self.device, self.colorImageMemory, null);
 
     vulkan.vkDestroyImageView(self.device, self.depthImageView, null);
     vulkan.vkDestroyImage(self.device, self.depthImage, null);
@@ -595,7 +622,7 @@ fn createInstance(allocator: Allocator) !vulkan.VkInstance {
     return instance;
 }
 
-fn getPhysicalDevice(instance: vulkan.VkInstance, allocator: Allocator, surface: vulkan.VkSurfaceKHR) !vulkan.VkPhysicalDevice {
+fn getPhysicalDevice(instance: vulkan.VkInstance, allocator: Allocator, surface: vulkan.VkSurfaceKHR) !struct { vulkan.VkPhysicalDevice, vulkan.VkSampleCountFlagBits } {
     var deviceCount: u32 = 0;
     if (vulkan.VK_SUCCESS != vulkan.vkEnumeratePhysicalDevices(instance, &deviceCount, null)) return error.VulkanError; // todo
 
@@ -609,7 +636,8 @@ fn getPhysicalDevice(instance: vulkan.VkInstance, allocator: Allocator, surface:
 
     for (deviceList) |device| {
         if (try isDeviceSuitable(device, allocator, surface)) {
-            return device;
+            const msaaSamples = getMaxUsableSampleCount(device);
+            return .{ device, msaaSamples };
         }
     }
 
@@ -903,7 +931,14 @@ fn getImageViewList(allocator: Allocator, device: vulkan.VkDevice, images: []vul
     return swapChainImageViews;
 }
 
-fn createGraphicPipeline(allocator: Allocator, device: vulkan.VkDevice, swapChainExtent: vulkan.VkExtent2D, renderPass: vulkan.VkRenderPass, descriptorSetLayout: vulkan.VkDescriptorSetLayout) !struct { vulkan.VkPipelineLayout, vulkan.VkPipeline } {
+fn createGraphicPipeline(
+    allocator: Allocator,
+    device: vulkan.VkDevice,
+    swapChainExtent: vulkan.VkExtent2D,
+    renderPass: vulkan.VkRenderPass,
+    descriptorSetLayout: vulkan.VkDescriptorSetLayout,
+    msaaSamples: vulkan.VkSampleCountFlagBits,
+) !struct { vulkan.VkPipelineLayout, vulkan.VkPipeline } {
     const vertShaderCode = @embedFile("shaders/vertex.spv");
     const fragShaderCode = @embedFile("shaders/fragment.spv");
 
@@ -985,7 +1020,7 @@ fn createGraphicPipeline(allocator: Allocator, device: vulkan.VkDevice, swapChai
     var multisampling = vulkan.VkPipelineMultisampleStateCreateInfo{};
     multisampling.sType = vulkan.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.sampleShadingEnable = vulkan.VK_FALSE;
-    multisampling.rasterizationSamples = vulkan.VK_SAMPLE_COUNT_1_BIT;
+    multisampling.rasterizationSamples = msaaSamples;
     multisampling.minSampleShading = 1.0; // Optional
     multisampling.pSampleMask = null; // Optional
     multisampling.alphaToCoverageEnable = vulkan.VK_FALSE; // Optional
@@ -1079,16 +1114,16 @@ fn createShaderModule(allocator: Allocator, device: vulkan.VkDevice, code: [:0]c
     return module;
 }
 
-fn createRenderPass(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDevice, swapChainImageFormat: vulkan.VkFormat) !vulkan.VkRenderPass {
+fn createRenderPass(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDevice, swapChainImageFormat: vulkan.VkFormat, msaaSamples: vulkan.VkSampleCountFlags) !vulkan.VkRenderPass {
     var colorAttachment = vulkan.VkAttachmentDescription{};
     colorAttachment.format = swapChainImageFormat;
-    colorAttachment.samples = vulkan.VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.samples = msaaSamples;
     colorAttachment.loadOp = vulkan.VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachment.storeOp = vulkan.VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachment.stencilLoadOp = vulkan.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     colorAttachment.stencilStoreOp = vulkan.VK_ATTACHMENT_STORE_OP_DONT_CARE;
     colorAttachment.initialLayout = vulkan.VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = vulkan.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    colorAttachment.finalLayout = vulkan.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     var colorAttachmentRef = vulkan.VkAttachmentReference{};
     colorAttachmentRef.attachment = 0;
@@ -1096,7 +1131,7 @@ fn createRenderPass(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDe
 
     var depthAttachment = vulkan.VkAttachmentDescription{};
     depthAttachment.format = try findDepthFormat(physicalDevice);
-    depthAttachment.samples = vulkan.VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.samples = msaaSamples;
     depthAttachment.loadOp = vulkan.VK_ATTACHMENT_LOAD_OP_CLEAR;
     depthAttachment.storeOp = vulkan.VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depthAttachment.stencilLoadOp = vulkan.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -1108,11 +1143,26 @@ fn createRenderPass(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDe
     depthAttachmentRef.attachment = 1;
     depthAttachmentRef.layout = vulkan.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
+    var colorAttachmentResolve = vulkan.VkAttachmentDescription{};
+    colorAttachmentResolve.format = swapChainImageFormat;
+    colorAttachmentResolve.samples = vulkan.VK_SAMPLE_COUNT_1_BIT;
+    colorAttachmentResolve.loadOp = vulkan.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachmentResolve.storeOp = vulkan.VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachmentResolve.stencilLoadOp = vulkan.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachmentResolve.stencilStoreOp = vulkan.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachmentResolve.initialLayout = vulkan.VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachmentResolve.finalLayout = vulkan.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    var colorAttachmentResolveRef = vulkan.VkAttachmentReference{};
+    colorAttachmentResolveRef.attachment = 2;
+    colorAttachmentResolveRef.layout = vulkan.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
     var subpass = vulkan.VkSubpassDescription{};
     subpass.pipelineBindPoint = vulkan.VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorAttachmentRef;
     subpass.pDepthStencilAttachment = &depthAttachmentRef;
+    subpass.pResolveAttachments = &colorAttachmentResolveRef;
 
     var dependency = vulkan.VkSubpassDependency{};
     dependency.srcSubpass = vulkan.VK_SUBPASS_EXTERNAL;
@@ -1121,7 +1171,7 @@ fn createRenderPass(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDe
     dependency.srcAccessMask = 0;
     dependency.dstStageMask = vulkan.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | vulkan.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     dependency.dstAccessMask = vulkan.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | vulkan.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    var attachments = [_]vulkan.VkAttachmentDescription{ colorAttachment, depthAttachment };
+    var attachments = [_]vulkan.VkAttachmentDescription{ colorAttachment, depthAttachment, colorAttachmentResolve };
 
     var renderPassInfo = vulkan.VkRenderPassCreateInfo{};
     renderPassInfo.sType = vulkan.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -1145,11 +1195,16 @@ fn createFramebuffers(
     renderPass: vulkan.VkRenderPass,
     swapChainExtent: vulkan.VkExtent2D,
     depthImageView: vulkan.VkImageView,
+    colorImageView: vulkan.VkImageView,
 ) ![]vulkan.VkFramebuffer {
     const swapChainFramebuffers = try allocator.alloc(vulkan.VkFramebuffer, swapChainImageViews.len);
 
     for (swapChainImageViews, 0..) |imageView, i| {
-        var attachments = [_]vulkan.VkImageView{ imageView, depthImageView };
+        var attachments = [_]vulkan.VkImageView{
+            colorImageView,
+            depthImageView,
+            imageView,
+        };
 
         var framebufferInfo = vulkan.VkFramebufferCreateInfo{};
         framebufferInfo.sType = vulkan.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -1685,6 +1740,7 @@ fn createTextureImage(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysical
         vulkan.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | vulkan.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vulkan.VK_IMAGE_USAGE_SAMPLED_BIT,
         vulkan.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
         mipLevels,
+        vulkan.VK_SAMPLE_COUNT_1_BIT,
     );
 
     try transitionImageLayout(
@@ -1722,6 +1778,7 @@ fn createImage(
     usage: vulkan.VkImageUsageFlags,
     properties: vulkan.VkMemoryPropertyFlags,
     mipLevels: u32,
+    numSamples: vulkan.VkSampleCountFlagBits,
 ) !struct { vulkan.VkImage, vulkan.VkDeviceMemory } {
     var imageInfo = vulkan.VkImageCreateInfo{};
     imageInfo.sType = vulkan.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -1736,7 +1793,7 @@ fn createImage(
     imageInfo.initialLayout = vulkan.VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage = usage;
     imageInfo.sharingMode = vulkan.VK_SHARING_MODE_EXCLUSIVE;
-    imageInfo.samples = vulkan.VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.samples = numSamples;
     imageInfo.flags = 0; // Optional
 
     var textureImage: vulkan.VkImage = null;
@@ -1994,6 +2051,7 @@ fn createDepthResources(
     commandPool: vulkan.VkCommandPool,
     graphicsQueue: vulkan.VkQueue,
     swapChainExtent: vulkan.VkExtent2D,
+    msaaSamples: vulkan.VkSampleCountFlagBits,
 ) !struct { vulkan.VkImage, vulkan.VkDeviceMemory, vulkan.VkImageView } {
     const depthFormat = try findDepthFormat(physicalDevice);
     const depthImage, const depthImageMemory = try createImage(
@@ -2006,6 +2064,7 @@ fn createDepthResources(
         vulkan.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
         vulkan.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
         1,
+        msaaSamples,
     );
 
     const depthImageView = try createImageView(device, depthImage, depthFormat, vulkan.VK_IMAGE_ASPECT_DEPTH_BIT, 1);
@@ -2184,4 +2243,54 @@ fn generateMipmaps(
     );
 
     try endSingleTimeCommands(device, commandPool, commandBuffer, graphicsQueue);
+}
+
+fn getMaxUsableSampleCount(physicalDevice: vulkan.VkPhysicalDevice) vulkan.VkSampleCountFlagBits {
+    var physicalDeviceProperties: vulkan.VkPhysicalDeviceProperties = undefined;
+    vulkan.vkGetPhysicalDeviceProperties(physicalDevice, &physicalDeviceProperties);
+
+    const counts = physicalDeviceProperties.limits.framebufferColorSampleCounts & physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+    if (counts & vulkan.VK_SAMPLE_COUNT_64_BIT != 0) {
+        return vulkan.VK_SAMPLE_COUNT_64_BIT;
+    }
+    if (counts & vulkan.VK_SAMPLE_COUNT_32_BIT != 0) {
+        return vulkan.VK_SAMPLE_COUNT_32_BIT;
+    }
+    if (counts & vulkan.VK_SAMPLE_COUNT_16_BIT != 0) {
+        return vulkan.VK_SAMPLE_COUNT_16_BIT;
+    }
+    if (counts & vulkan.VK_SAMPLE_COUNT_8_BIT != 0) {
+        return vulkan.VK_SAMPLE_COUNT_8_BIT;
+    }
+    if (counts & vulkan.VK_SAMPLE_COUNT_4_BIT != 0) {
+        return vulkan.VK_SAMPLE_COUNT_4_BIT;
+    }
+    if (counts & vulkan.VK_SAMPLE_COUNT_2_BIT != 0) {
+        return vulkan.VK_SAMPLE_COUNT_2_BIT;
+    }
+
+    return vulkan.VK_SAMPLE_COUNT_1_BIT;
+}
+
+fn createColorResources(
+    device: vulkan.VkDevice,
+    physicalDevice: vulkan.VkPhysicalDevice,
+    swapChainExtent: vulkan.VkExtent2D,
+    colorFormat: vulkan.VkFormat,
+    msaaSamples: vulkan.VkSampleCountFlagBits,
+) !struct { vulkan.VkImage, vulkan.VkDeviceMemory, vulkan.VkImageView } {
+    const colorImage, const colorImageMemory = try createImage(
+        device,
+        physicalDevice,
+        swapChainExtent.width,
+        swapChainExtent.height,
+        colorFormat,
+        vulkan.VK_IMAGE_TILING_OPTIMAL,
+        vulkan.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | vulkan.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        vulkan.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        1,
+        msaaSamples,
+    );
+    const colorImageView = try createImageView(device, colorImage, colorFormat, vulkan.VK_IMAGE_ASPECT_COLOR_BIT, 1);
+    return .{ colorImage, colorImageMemory, colorImageView };
 }
