@@ -4,6 +4,23 @@ const Scanner = @import("zig-wayland").Scanner;
 // declaratively construct a build graph that will be executed by an external
 // runner.
 pub fn build(b: *std.Build) void {
+    const tool = b.addExecutable(.{
+        .name = "shader_compile",
+        .root_source_file = b.path("tools/shader_compile.zig"),
+        .target = b.host,
+    });
+
+    tool.linkSystemLibrary("shaderc");
+    tool.linkLibC();
+
+    const tool_step_fragment = b.addRunArtifact(tool);
+    tool_step_fragment.addFileArg(b.path("shaders/shader.frag"));
+    const output_frag = tool_step_fragment.addOutputFileArg("fragment.spv");
+
+    const tool_step_vertex = b.addRunArtifact(tool);
+    tool_step_vertex.addFileArg(b.path("shaders/shader.vert"));
+    const output_vertex = tool_step_vertex.addOutputFileArg("vertex.spv");
+
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -62,6 +79,14 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("vulkan");
     exe.linkSystemLibrary("wayland-client");
     exe.linkSystemLibrary("xkbcommon");
+
+    exe.root_module.addAnonymousImport("shaders/fragment.spv", .{
+        .root_source_file = output_frag,
+    });
+
+    exe.root_module.addAnonymousImport("shaders/vertex.spv", .{
+        .root_source_file = output_vertex,
+    });
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
