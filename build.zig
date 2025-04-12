@@ -1,5 +1,5 @@
 const std = @import("std");
-const Scanner = @import("zig-wayland").Scanner;
+const Scanner = @import("wayland").Scanner;
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
@@ -7,7 +7,7 @@ pub fn build(b: *std.Build) void {
     const tool = b.addExecutable(.{
         .name = "shader_compile",
         .root_source_file = b.path("tools/shader_compile.zig"),
-        .target = b.host,
+        .target = b.graph.host,
     });
 
     tool.linkSystemLibrary("shaderc");

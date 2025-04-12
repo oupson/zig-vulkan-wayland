@@ -6,7 +6,9 @@
     //
     // It is redundant to include "zig" in this name because it is already
     // within the Zig package namespace.
-    .name = "zvulk",
+    .name = .zvulk,
+
+    .fingerprint = 0x7a06c6f32f75efb6,
 
     // This is a [Semantic Version](https://semver.org/).
     // In a future version of Zig it will be used for package deduplication.
@@ -51,13 +53,13 @@
         //    // actually used.
         //    .lazy = false,
         //},
-        .@"zig-wayland" = .{
-            .url = "https://github.com/ifreund/zig-wayland/archive/a507358764d209627e6a555104099b0825d8934c.zip",
-            .hash = "12204339bf0ea439f92ad54e220be6d42f15431f3d1cd107fb272d0b19a43d98ab17",
-        },
         .zalgebra = .{
-            .url = "https://github.com/kooparse/zalgebra/archive/refs/heads/main.zip",
-            .hash = "1220fbbcfa859f668d69b4f7d2aa621d13b128a77b46965e6c4aae35f9c1d7b85eb8",
+            .url = "git+https://github.com/kooparse/zalgebra.git#8685b39c606c0d907052478d0f55249051e7730d",
+            .hash = "zalgebra-0.0.0-aaiVSj5nAQDFe0Cnx-aoGE2HzVtg1Ij62auYZ6nxR9do",
+        },
+        .wayland = .{
+            .url = "git+https://codeberg.org/ifreund/zig-wayland.git#f3c5d503e540ada8cbcb056420de240af0c094f7",
+            .hash = "wayland-0.4.0-dev-lQa1kjfIAQCmhhQu3xF0KH-94-TzeMXOqfnP0-Dg6Wyy",
         },
     },
 
