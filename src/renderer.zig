@@ -35,9 +35,9 @@ const Self = @This();
 pub const Camera = struct {
     yaw: f32 = 0,
     pitch: f32 = 0,
-    x: f32 = -4,
-    y: f32 = 0,
-    z: f32 = 0,
+    x: f32 = 16.5,
+    y: f32 = 1,
+    z: f32 = 16.5,
 };
 
 pub const Instance = struct {

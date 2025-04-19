@@ -138,9 +138,24 @@ pub fn dispatch(self: *Self) !void {
         const indexBuffer = try self.allocator.alloc(u32, Chunk.INDEX_BUFFER_SIZE);
         defer self.allocator.free(indexBuffer);
 
-        chunk.putBlock(4, 0, 0, 1);
+        for (0..32) |x| {
+            for (0..32) |z| {
+                chunk.putBlock(x, 0, z, 1);
+            }
+        }
 
-        chunk.putBlock(6, 0, 0, 1);
+        chunk.putBlock(17, 1, 31, 1);
+        chunk.putBlock(16, 1, 31, 1);
+
+        chunk.putBlock(31, 1, 16, 1);
+        chunk.putBlock(31, 1, 17, 1);
+
+        for (0..32) |x| {
+            for (0..32) |z| {
+                chunk.putBlock(x, 2, z, 1);
+            }
+        }
+
         const vertexCount, const indexCount = chunk.getMesh(meshBuffer, indexBuffer);
 
         if (self.renderer) |r| {
