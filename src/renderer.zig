@@ -56,9 +56,8 @@ pub const Instance = struct {
     }
 };
 
-const Vertex = struct {
+pub const Vertex = struct {
     pos: @Vector(3, f32),
-    color: @Vector(3, f32),
     texCoord: @Vector(2, f32),
 
     fn getBindingDescription() vulkan.VkVertexInputBindingDescription {
@@ -70,8 +69,8 @@ const Vertex = struct {
         return bindingDescription;
     }
 
-    fn getAttributeDescriptions() [3]vulkan.VkVertexInputAttributeDescription {
-        var attributeDescriptions: [3]vulkan.VkVertexInputAttributeDescription = .{ .{}, .{}, .{} };
+    fn getAttributeDescriptions() [2]vulkan.VkVertexInputAttributeDescription {
+        var attributeDescriptions: [2]vulkan.VkVertexInputAttributeDescription = .{ .{}, .{} };
         attributeDescriptions[0].binding = 0;
         attributeDescriptions[0].location = 0;
         attributeDescriptions[0].format = vulkan.VK_FORMAT_R32G32B32_SFLOAT;
@@ -79,13 +78,8 @@ const Vertex = struct {
 
         attributeDescriptions[1].binding = 0;
         attributeDescriptions[1].location = 1;
-        attributeDescriptions[1].format = vulkan.VK_FORMAT_R32G32B32_SFLOAT;
-        attributeDescriptions[1].offset = @offsetOf(Vertex, "color");
-
-        attributeDescriptions[2].binding = 0;
-        attributeDescriptions[2].location = 2;
-        attributeDescriptions[2].format = vulkan.VK_FORMAT_R32G32_SFLOAT;
-        attributeDescriptions[2].offset = @offsetOf(Vertex, "texCoord");
+        attributeDescriptions[1].format = vulkan.VK_FORMAT_R32G32_SFLOAT;
+        attributeDescriptions[1].offset = @offsetOf(Vertex, "texCoord");
 
         return attributeDescriptions;
     }
@@ -101,127 +95,103 @@ const vertices = [_]Vertex{
     // bottom
     .{
         .pos = .{ -0.5, -0.5, 0.5 },
-        .color = .{ 1.0, 0.0, 0.0 },
         .texCoord = .{ 0.0, 0.0 },
     },
     .{
         .pos = .{ 0.5, -0.5, 0.5 },
-        .color = .{ 0.0, 1.0, 0.0 },
         .texCoord = .{ 0.5, 0.0 },
     },
     .{
         .pos = .{ 0.5, -0.5, -0.5 },
-        .color = .{ 0.0, 0.0, 1.0 },
         .texCoord = .{ 0.5, 1.0 },
     },
     .{
         .pos = .{ -0.5, -0.5, -0.5 },
-        .color = .{ 1.0, 1.0, 1.0 },
         .texCoord = .{ 0.0, 1.0 },
     },
     // top
     .{
         .pos = .{ -0.5, 0.5, 0.5 },
-        .color = .{ 1.0, 0.0, 0.0 },
         .texCoord = .{ 0.0, 0.0 },
     },
     .{
         .pos = .{ 0.5, 0.5, 0.5 },
-        .color = .{ 0.0, 1.0, 0.0 },
         .texCoord = .{ 0.5, 0.0 },
     },
     .{
         .pos = .{ 0.5, 0.5, -0.5 },
-        .color = .{ 0.0, 0.0, 1.0 },
         .texCoord = .{ 0.5, 1.0 },
     },
     .{
         .pos = .{ -0.5, 0.5, -0.5 },
-        .color = .{ 1.0, 1.0, 1.0 },
         .texCoord = .{ 0.0, 1.0 },
     },
     // north 8-11
     .{
         .pos = .{ -0.5, -0.5, 0.5 },
-        .color = .{ 1.0, 0.0, 0.0 },
         .texCoord = .{ 0.5, 1.0 },
     },
     .{
         .pos = .{ -0.5, 0.5, 0.5 },
-        .color = .{ 0.0, 1.0, 0.0 },
         .texCoord = .{ 0.5, 0.0 },
     },
     .{
         .pos = .{ 0.5, 0.5, 0.5 },
-        .color = .{ 0.0, 0.0, 1.0 },
         .texCoord = .{ 1.0, 0.0 },
     },
     .{
         .pos = .{ 0.5, -0.5, 0.5 },
-        .color = .{ 1.0, 1.0, 1.0 },
         .texCoord = .{ 1.0, 1.0 },
     },
     // east 12-15
     .{
         .pos = .{ 0.5, -0.5, -0.5 },
-        .color = .{ 1.0, 0.0, 0.0 },
         .texCoord = .{ 1.0, 1.0 },
     },
     .{
         .pos = .{ 0.5, 0.5, -0.5 },
-        .color = .{ 0.0, 1.0, 0.0 },
         .texCoord = .{ 1.0, 0.0 },
     },
     .{
         .pos = .{ 0.5, 0.5, 0.5 },
-        .color = .{ 0.0, 0.0, 1.0 },
         .texCoord = .{ 0.5, 0.0 },
     },
     .{
         .pos = .{ 0.5, -0.5, 0.5 },
-        .color = .{ 1.0, 1.0, 1.0 },
         .texCoord = .{ 0.5, 1.0 },
     },
     // south 16-19
     .{
         .pos = .{ -0.5, -0.5, -0.5 },
-        .color = .{ 1.0, 0.0, 0.0 },
         .texCoord = .{ 1.0, 1.0 },
     },
     .{
         .pos = .{ -0.5, 0.5, -0.5 },
-        .color = .{ 0.0, 1.0, 0.0 },
         .texCoord = .{ 1.0, 0.0 },
     },
     .{
         .pos = .{ 0.5, 0.5, -0.5 },
-        .color = .{ 0.0, 0.0, 1.0 },
         .texCoord = .{ 0.5, 0.0 },
     },
     .{
         .pos = .{ 0.5, -0.5, -0.5 },
-        .color = .{ 1.0, 1.0, 1.0 },
         .texCoord = .{ 0.5, 1.0 },
     },
     // 20-23
     .{
         .pos = .{ -0.5, -0.5, -0.5 },
-        .color = .{ 1.0, 0.0, 0.0 },
         .texCoord = .{ 0.5, 1.0 },
     },
     .{
         .pos = .{ -0.5, 0.5, -0.5 },
-        .color = .{ 0.0, 1.0, 0.0 },
         .texCoord = .{ 0.5, 0.0 },
     },
     .{
         .pos = .{ -0.5, 0.5, 0.5 },
-        .color = .{ 0.0, 0.0, 1.0 },
         .texCoord = .{ 1.0, 0.0 },
     },
     .{
         .pos = .{ -0.5, -0.5, 0.5 },
-        .color = .{ 1.0, 1.0, 1.0 },
         .texCoord = .{ 1.0, 1.0 },
     },
 };
