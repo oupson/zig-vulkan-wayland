@@ -186,8 +186,8 @@ pub fn dispatch(self: *Self) !void {
     const forward = @as(f32, @floatFromInt(keyboard_state.forward));
     const right = @as(f32, @floatFromInt(keyboard_state.right));
 
-    const x = std.math.cos(yaw) * forward + std.math.sin(-yaw) * right;
-    const z = std.math.sin(yaw) * forward + std.math.cos(-yaw) * right;
+    const x = std.math.sin(yaw) * forward + std.math.cos(-yaw) * right;
+    const z = std.math.cos(yaw) * forward + std.math.sin(-yaw) * right;
 
     camera.x += @as(f32, x) * deltaTime;
     camera.y += @as(f32, @floatFromInt(keyboard_state.up)) * deltaTime;
@@ -341,8 +341,8 @@ fn wlKeyboardListener(keyboard: *wl.Keyboard, event: wl.Keyboard.Event, data: *S
                     Keyboard.xkbcommon.XKB_KEY_s => data.context.keyboard_state.forward -= 1,
                     Keyboard.xkbcommon.XKB_KEY_d => data.context.keyboard_state.right += 1,
                     Keyboard.xkbcommon.XKB_KEY_a => data.context.keyboard_state.right -= 1,
-                    Keyboard.xkbcommon.XKB_KEY_space => data.context.keyboard_state.up -= 1,
-                    Keyboard.xkbcommon.XKB_KEY_Shift_L => data.context.keyboard_state.up += 1,
+                    Keyboard.xkbcommon.XKB_KEY_space => data.context.keyboard_state.up += 1,
+                    Keyboard.xkbcommon.XKB_KEY_Shift_L => data.context.keyboard_state.up -= 1,
                     else => {},
                 }
             }
@@ -356,8 +356,8 @@ fn wlKeyboardListener(keyboard: *wl.Keyboard, event: wl.Keyboard.Event, data: *S
                     Keyboard.xkbcommon.XKB_KEY_s => data.context.keyboard_state.forward += 1,
                     Keyboard.xkbcommon.XKB_KEY_d => data.context.keyboard_state.right -= 1,
                     Keyboard.xkbcommon.XKB_KEY_a => data.context.keyboard_state.right += 1,
-                    Keyboard.xkbcommon.XKB_KEY_space => data.context.keyboard_state.up += 1,
-                    Keyboard.xkbcommon.XKB_KEY_Shift_L => data.context.keyboard_state.up -= 1,
+                    Keyboard.xkbcommon.XKB_KEY_space => data.context.keyboard_state.up -= 1,
+                    Keyboard.xkbcommon.XKB_KEY_Shift_L => data.context.keyboard_state.up += 1,
                     else => {},
                 }
             } else {
@@ -366,8 +366,8 @@ fn wlKeyboardListener(keyboard: *wl.Keyboard, event: wl.Keyboard.Event, data: *S
                     Keyboard.xkbcommon.XKB_KEY_s => data.context.keyboard_state.forward -= 1,
                     Keyboard.xkbcommon.XKB_KEY_d => data.context.keyboard_state.right += 1,
                     Keyboard.xkbcommon.XKB_KEY_a => data.context.keyboard_state.right -= 1,
-                    Keyboard.xkbcommon.XKB_KEY_space => data.context.keyboard_state.up -= 1,
-                    Keyboard.xkbcommon.XKB_KEY_Shift_L => data.context.keyboard_state.up += 1,
+                    Keyboard.xkbcommon.XKB_KEY_space => data.context.keyboard_state.up += 1,
+                    Keyboard.xkbcommon.XKB_KEY_Shift_L => data.context.keyboard_state.up -= 1,
                     else => {},
                 }
             }

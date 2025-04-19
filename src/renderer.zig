@@ -1451,15 +1451,15 @@ fn updateUniformBuffer(self: *Self, camera: *Camera) !void {
     const Mat4 = zalgebra.Mat4;
     const Vector3 = zalgebra.GenericVector(3, f32);
 
-    const up = Vector3.new(0.0, 1.0, 0.0);
+    const up = Vector3.new(0.0, -1.0, 0.0);
 
-    const model = Mat4.identity().rotate(0, up);
+    const model = Mat4.identity();
 
     const yaw = std.math.degreesToRadians(camera.yaw);
     const pitch = std.math.degreesToRadians(camera.pitch);
-    const x = std.math.cos(yaw) * std.math.cos(pitch);
-    const y = std.math.sin(pitch);
-    const z = std.math.sin(yaw) * std.math.cos(pitch);
+    const x = std.math.sin(yaw) * std.math.cos(pitch);
+    const y = -std.math.sin(pitch);
+    const z = std.math.cos(yaw) * std.math.cos(pitch);
 
     const pos = Vector3.new(camera.x, camera.y, camera.z);
     const view = Mat4.lookAt(pos, Vector3.new(x, y, z).norm().add(pos), up);
