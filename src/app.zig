@@ -10,6 +10,7 @@ const zwp = wayland.client.zwp;
 const Allocator = std.mem.Allocator;
 const Renderer = @import("renderer.zig");
 const Keyboard = @import("keyboard.zig");
+const Chunk = @import("chunk.zig");
 
 const Context = struct {
     shm: ?*wl.Shm = null,
@@ -130,6 +131,18 @@ pub fn deinit(self: *Self) void {
 
 pub fn dispatch(self: *Self) !void {
     if (self.recreate) {
+        var chunk = Chunk.init(0, 0, 0);
+
+        const meshBuffer = try self.allocator.alloc(Renderer.Vertex, Chunk.MESH_SIZE);
+        defer self.allocator.free(meshBuffer);
+        const indexBuffer = try self.allocator.alloc(u32, Chunk.INDEX_BUFFER_SIZE);
+        defer self.allocator.free(indexBuffer);
+
+        chunk.putBlock(4, 0, 0, 1);
+
+        chunk.putBlock(6, 0, 0, 1);
+        const vertexCount, const indexCount = chunk.getMesh(meshBuffer, indexBuffer);
+
         if (self.renderer) |r| {
             try r.deinit();
         }
@@ -140,6 +153,8 @@ pub fn dispatch(self: *Self) !void {
             self.context.surface,
             self.width,
             self.height,
+            meshBuffer[0..vertexCount],
+            indexBuffer[0..indexCount],
         );
         self.recreate = false;
     }

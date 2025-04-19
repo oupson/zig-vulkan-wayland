@@ -91,126 +91,6 @@ const UniformBufferObject = extern struct {
     proj: zalgebra.Mat4 align(16),
 };
 
-const vertices = [_]Vertex{
-    // bottom
-    .{
-        .pos = .{ -0.5, -0.5, 0.5 },
-        .texCoord = .{ 0.0, 0.0 },
-    },
-    .{
-        .pos = .{ 0.5, -0.5, 0.5 },
-        .texCoord = .{ 0.5, 0.0 },
-    },
-    .{
-        .pos = .{ 0.5, -0.5, -0.5 },
-        .texCoord = .{ 0.5, 1.0 },
-    },
-    .{
-        .pos = .{ -0.5, -0.5, -0.5 },
-        .texCoord = .{ 0.0, 1.0 },
-    },
-    // top
-    .{
-        .pos = .{ -0.5, 0.5, 0.5 },
-        .texCoord = .{ 0.0, 0.0 },
-    },
-    .{
-        .pos = .{ 0.5, 0.5, 0.5 },
-        .texCoord = .{ 0.5, 0.0 },
-    },
-    .{
-        .pos = .{ 0.5, 0.5, -0.5 },
-        .texCoord = .{ 0.5, 1.0 },
-    },
-    .{
-        .pos = .{ -0.5, 0.5, -0.5 },
-        .texCoord = .{ 0.0, 1.0 },
-    },
-    // north 8-11
-    .{
-        .pos = .{ -0.5, -0.5, 0.5 },
-        .texCoord = .{ 0.5, 1.0 },
-    },
-    .{
-        .pos = .{ -0.5, 0.5, 0.5 },
-        .texCoord = .{ 0.5, 0.0 },
-    },
-    .{
-        .pos = .{ 0.5, 0.5, 0.5 },
-        .texCoord = .{ 1.0, 0.0 },
-    },
-    .{
-        .pos = .{ 0.5, -0.5, 0.5 },
-        .texCoord = .{ 1.0, 1.0 },
-    },
-    // east 12-15
-    .{
-        .pos = .{ 0.5, -0.5, -0.5 },
-        .texCoord = .{ 1.0, 1.0 },
-    },
-    .{
-        .pos = .{ 0.5, 0.5, -0.5 },
-        .texCoord = .{ 1.0, 0.0 },
-    },
-    .{
-        .pos = .{ 0.5, 0.5, 0.5 },
-        .texCoord = .{ 0.5, 0.0 },
-    },
-    .{
-        .pos = .{ 0.5, -0.5, 0.5 },
-        .texCoord = .{ 0.5, 1.0 },
-    },
-    // south 16-19
-    .{
-        .pos = .{ -0.5, -0.5, -0.5 },
-        .texCoord = .{ 1.0, 1.0 },
-    },
-    .{
-        .pos = .{ -0.5, 0.5, -0.5 },
-        .texCoord = .{ 1.0, 0.0 },
-    },
-    .{
-        .pos = .{ 0.5, 0.5, -0.5 },
-        .texCoord = .{ 0.5, 0.0 },
-    },
-    .{
-        .pos = .{ 0.5, -0.5, -0.5 },
-        .texCoord = .{ 0.5, 1.0 },
-    },
-    // 20-23
-    .{
-        .pos = .{ -0.5, -0.5, -0.5 },
-        .texCoord = .{ 0.5, 1.0 },
-    },
-    .{
-        .pos = .{ -0.5, 0.5, -0.5 },
-        .texCoord = .{ 0.5, 0.0 },
-    },
-    .{
-        .pos = .{ -0.5, 0.5, 0.5 },
-        .texCoord = .{ 1.0, 0.0 },
-    },
-    .{
-        .pos = .{ -0.5, -0.5, 0.5 },
-        .texCoord = .{ 1.0, 1.0 },
-    },
-};
-
-const indices = [_]u16{
-    // bottom
-    0,  2,  3,  0,  1,  2,
-    // top
-    4,  7,  6,  4,  6,  5,
-    // north
-    8,  9,  10, 10, 11, 8,
-    // east
-    13, 12, 14, 14, 12, 15,
-    // south
-    16, 18, 17, 18, 16, 19,
-    // west
-    20, 21, 22, 22, 23, 20,
-};
-
 allocator: Allocator,
 instance: vulkan.VkInstance,
 vulkanSurface: vulkan.VkSurfaceKHR,
@@ -250,6 +130,7 @@ depthImageView: vulkan.VkImageView,
 colorImage: vulkan.VkImage,
 colorImageMemory: vulkan.VkDeviceMemory,
 colorImageView: vulkan.VkImageView,
+indexCount: u32,
 
 pub fn new(
     vulkanInstance: Instance,
@@ -258,6 +139,8 @@ pub fn new(
     surface: *wl.Surface,
     width: i32,
     height: i32,
+    vertex: []Vertex,
+    index: []u32,
 ) !Self {
     std.log.info("create", .{});
     const instance = vulkanInstance.instance;
@@ -333,8 +216,20 @@ pub fn new(
     const textureImageView = try createTextureImageView(device, textureImage, mipLevels);
     const textureSampler = try createTextureSampler(device, physicalDevice, mipLevels);
 
-    const vertexBuffer, const vertexBufferMemory = try createVertexBuffer(device, physicalDevice, commandPool, graphicQueue);
-    const indexBuffer, const indexBufferMemory = try createIndexBuffer(device, physicalDevice, commandPool, graphicQueue);
+    const vertexBuffer, const vertexBufferMemory = try createVertexBuffer(
+        device,
+        physicalDevice,
+        commandPool,
+        graphicQueue,
+        @ptrCast(vertex),
+    );
+    const indexBuffer, const indexBufferMemory = try createIndexBuffer(
+        device,
+        physicalDevice,
+        commandPool,
+        graphicQueue,
+        @ptrCast(index),
+    );
     const uniformBuffers, const uniformBuffersMemory, const uniformBuffersMapped = try createUniformBuffers(allocator, device, physicalDevice);
 
     const descriptorPool = try createDescriptorPool(device);
@@ -381,6 +276,7 @@ pub fn new(
         .colorImage = colorImage,
         .colorImageMemory = colorImageMemory,
         .colorImageView = colorImageView,
+        .indexCount = @intCast(index.len),
     };
 }
 
@@ -493,6 +389,7 @@ pub fn draw(self: *Self, camera: *Camera) !void {
         self.indexBuffer,
         self.pipelineLayout,
         &self.descriptorSets[self.currentFrame],
+        self.indexCount,
     );
 
     var submitInfo = vulkan.VkSubmitInfo{};
@@ -1233,6 +1130,7 @@ fn recordCommandBuffer(
     indexBuffer: vulkan.VkBuffer,
     pipelineLayout: vulkan.VkPipelineLayout,
     descriptorSet: *vulkan.VkDescriptorSet,
+    indexCount: u32,
 ) !void {
     var beginInfo = vulkan.VkCommandBufferBeginInfo{};
     beginInfo.sType = vulkan.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -1278,7 +1176,7 @@ fn recordCommandBuffer(
         const vertexBuffers = [_]vulkan.VkBuffer{vertexBuffer};
         const offsets = [_]vulkan.VkDeviceSize{0};
         vulkan.vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffers, &offsets);
-        vulkan.vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, vulkan.VK_INDEX_TYPE_UINT16);
+        vulkan.vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, vulkan.VK_INDEX_TYPE_UINT32);
         vulkan.vkCmdBindDescriptorSets(
             commandBuffer,
             vulkan.VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1290,7 +1188,7 @@ fn recordCommandBuffer(
             null,
         );
 
-        vulkan.vkCmdDrawIndexed(commandBuffer, indices.len, 1, 0, 0, 0);
+        vulkan.vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
     }
     vulkan.vkCmdEndRenderPass(commandBuffer);
 
@@ -1327,8 +1225,9 @@ pub fn createVertexBuffer(
     physicalDevice: vulkan.VkPhysicalDevice,
     commandPool: vulkan.VkCommandPool,
     graphicQueue: vulkan.VkQueue,
+    vertex: []u8,
 ) !struct { vulkan.VkBuffer, vulkan.VkDeviceMemory } {
-    const bufferSize = @sizeOf(Vertex) * vertices.len;
+    const bufferSize = vertex.len;
     const stagingBuffer, const stagingBufferMemory = try createBuffer(
         device,
         physicalDevice,
@@ -1345,7 +1244,7 @@ pub fn createVertexBuffer(
     if (vulkan.VK_SUCCESS != vulkan.vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, @ptrCast(&data))) {
         return error.MapMemoryFailed;
     }
-    @memcpy(data[0..bufferSize], std.mem.asBytes(&vertices));
+    @memcpy(data[0..bufferSize], vertex);
     vulkan.vkUnmapMemory(device, stagingBufferMemory);
 
     const vertexBuffer, const vertexBufferMemory = try createBuffer(
@@ -1362,7 +1261,7 @@ pub fn createVertexBuffer(
         commandPool,
         stagingBuffer,
         vertexBuffer,
-        bufferSize,
+        @intCast(bufferSize),
     );
 
     return .{ vertexBuffer, vertexBufferMemory };
@@ -1443,8 +1342,9 @@ fn createIndexBuffer(
     physicalDevice: vulkan.VkPhysicalDevice,
     commandPool: vulkan.VkCommandPool,
     graphicQueue: vulkan.VkQueue,
+    index: []u8,
 ) !struct { vulkan.VkBuffer, vulkan.VkDeviceMemory } {
-    const bufferSize = @sizeOf(u16) * indices.len;
+    const bufferSize = index.len;
     const stagingBuffer, const stagingBufferMemory = try createBuffer(
         device,
         physicalDevice,
@@ -1461,7 +1361,7 @@ fn createIndexBuffer(
     if (vulkan.VK_SUCCESS != vulkan.vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, @ptrCast(&data))) {
         return error.MapMemoryFailed;
     }
-    @memcpy(data[0..bufferSize], std.mem.asBytes(&indices));
+    @memcpy(data[0..bufferSize], index);
     vulkan.vkUnmapMemory(device, stagingBufferMemory);
 
     const indexBuffer, const indexBufferMemory = try createBuffer(
@@ -1478,7 +1378,7 @@ fn createIndexBuffer(
         commandPool,
         stagingBuffer,
         indexBuffer,
-        bufferSize,
+        @intCast(bufferSize),
     );
 
     return .{ indexBuffer, indexBufferMemory };
