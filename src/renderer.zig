@@ -230,7 +230,7 @@ pub fn new(
         graphicQueue,
         @ptrCast(index),
     );
-    const uniformBuffers, const uniformBuffersMemory, const uniformBuffersMapped = try createUniformBuffers(allocator, device, physicalDevice);
+    const uniformBuffers, const uniformBuffersMemory, const uniformBuffersMapped = try createUniformBuffers(UniformBufferObject, allocator, device, physicalDevice);
 
     const descriptorPool = try createDescriptorPool(device);
     const descriptorSets = try createDescriptorSet(allocator, device, descriptorPool, uniformBuffers, descriptorSetLayout, textureImageView, textureSampler);
@@ -1413,12 +1413,12 @@ fn createDescriptorSetLayout(device: vulkan.VkDevice) !vulkan.VkDescriptorSetLay
     return descriptorSetLayout;
 }
 
-fn createUniformBuffers(allocator: Allocator, device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDevice) !struct {
+fn createUniformBuffers(varType: anytype, allocator: Allocator, device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDevice) !struct {
     []vulkan.VkBuffer,
     []vulkan.VkDeviceMemory,
     [][]u8,
 } {
-    const bufferSize = @sizeOf(UniformBufferObject);
+    const bufferSize = @sizeOf(varType);
 
     const uniformBuffers = try allocator.alloc(vulkan.VkBuffer, MAX_FRAMES_IN_FLIGHT);
     const uniformBuffersMemory = try allocator.alloc(vulkan.VkDeviceMemory, MAX_FRAMES_IN_FLIGHT);
