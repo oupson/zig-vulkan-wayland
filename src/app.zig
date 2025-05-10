@@ -133,34 +133,6 @@ const LOS = 2;
 
 pub fn dispatch(self: *Self) !void {
     if (self.recreate) {
-        const meshBuffer = try self.allocator.alloc(Renderer.Vertex, Chunk.MESH_SIZE * LOS * LOS * LOS);
-        defer self.allocator.free(meshBuffer);
-        const indexBuffer = try self.allocator.alloc(u32, Chunk.INDEX_BUFFER_SIZE * LOS * LOS * LOS);
-        defer self.allocator.free(indexBuffer);
-
-        const asBytes: []u8 = @ptrCast(meshBuffer);
-        std.log.err("{}", .{asBytes
-            .len});
-
-        var vertexCount: usize = 0;
-        var indexCount: usize = 0;
-        for (0..10) |z| {
-            for (0..10) |x| {
-                var chunk = Chunk.init(@as(f32, @floatFromInt(x)) - (LOS / 2.0), 0, @as(f32, @floatFromInt(z)) - (LOS / 2.0));
-                for (0..32) |cx| {
-                    for (0..32) |cz| {
-                        chunk.putBlock(cx, 0, cz, 1);
-                    }
-                }
-
-                const vc, const ic = chunk.getMesh(meshBuffer[vertexCount..], indexBuffer[indexCount..], vertexCount);
-                vertexCount += vc;
-                indexCount += ic;
-            }
-        }
-
-        std.log.err("Generated {d} vertices and {d} indices", .{ vertexCount, indexCount });
-
         if (self.renderer) |r| {
             try r.deinit();
         }
@@ -171,8 +143,6 @@ pub fn dispatch(self: *Self) !void {
             self.context.surface,
             self.width,
             self.height,
-            meshBuffer[0..vertexCount],
-            indexBuffer[0..indexCount],
         );
         self.recreate = false;
     }

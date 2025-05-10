@@ -56,9 +56,9 @@ pub const Instance = struct {
     }
 };
 
-pub const Vertex = struct {
+const Vertex = struct {
+    // TODO: 2D
     pos: @Vector(3, f32),
-    texCoord: @Vector(2, f32),
 
     fn getBindingDescription() vulkan.VkVertexInputBindingDescription {
         var bindingDescription = vulkan.VkVertexInputBindingDescription{};
@@ -69,26 +69,20 @@ pub const Vertex = struct {
         return bindingDescription;
     }
 
-    fn getAttributeDescriptions() [2]vulkan.VkVertexInputAttributeDescription {
-        var attributeDescriptions: [2]vulkan.VkVertexInputAttributeDescription = .{ .{}, .{} };
+    fn getAttributeDescriptions() [1]vulkan.VkVertexInputAttributeDescription {
+        var attributeDescriptions: [1]vulkan.VkVertexInputAttributeDescription = .{.{}};
         attributeDescriptions[0].binding = 0;
         attributeDescriptions[0].location = 0;
         attributeDescriptions[0].format = vulkan.VK_FORMAT_R32G32B32_SFLOAT;
         attributeDescriptions[0].offset = @offsetOf(Vertex, "pos");
-
-        attributeDescriptions[1].binding = 0;
-        attributeDescriptions[1].location = 1;
-        attributeDescriptions[1].format = vulkan.VK_FORMAT_R32G32_SFLOAT;
-        attributeDescriptions[1].offset = @offsetOf(Vertex, "texCoord");
-
         return attributeDescriptions;
     }
 };
 
 const UniformBufferObject = extern struct {
-    model: zalgebra.Mat4 align(16),
-    view: zalgebra.Mat4 align(16),
-    proj: zalgebra.Mat4 align(16),
+    camera_pos: @Vector(4, f32) align(4),
+    camera_rot: @Vector(2, f32) align(2),
+    resolution: @Vector(2, f32) align(2),
 };
 
 allocator: Allocator,
@@ -139,10 +133,7 @@ pub fn new(
     surface: *wl.Surface,
     width: i32,
     height: i32,
-    vertex: []Vertex,
-    index: []u32,
 ) !Self {
-    std.log.info("create", .{});
     const instance = vulkanInstance.instance;
     const vulkanSurface = try createSurface(instance, display, surface);
 
@@ -216,19 +207,30 @@ pub fn new(
     const textureImageView = try createTextureImageView(device, textureImage, mipLevels);
     const textureSampler = try createTextureSampler(device, physicalDevice, mipLevels);
 
+    const vertex = [_]Vertex{
+        .{ .pos = .{ -1.0, -1.0, 0.0 } },
+        .{ .pos = .{ 1.0, -1.0, 0.0 } },
+        .{ .pos = .{ 1.0, 1.0, 0.0 } },
+        .{ .pos = .{ -1.0, 1.0, 0.0 } },
+    };
+
+    const index = [_]u32{
+        3, 1, 0, 3, 2, 1,
+    };
+
     const vertexBuffer, const vertexBufferMemory = try createVertexBuffer(
         device,
         physicalDevice,
         commandPool,
         graphicQueue,
-        @ptrCast(vertex),
+        @ptrCast(@constCast(&vertex)),
     );
     const indexBuffer, const indexBufferMemory = try createIndexBuffer(
         device,
         physicalDevice,
         commandPool,
         graphicQueue,
-        @ptrCast(index),
+        @ptrCast(@constCast(&index)),
     );
     const uniformBuffers, const uniformBuffersMemory, const uniformBuffersMapped = try createUniformBuffers(UniformBufferObject, allocator, device, physicalDevice);
 
@@ -995,6 +997,7 @@ fn createRenderPass(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDe
     colorAttachmentRef.attachment = 0;
     colorAttachmentRef.layout = vulkan.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+    // TODO: Remove ?
     var depthAttachment = vulkan.VkAttachmentDescription{};
     depthAttachment.format = try findDepthFormat(physicalDevice);
     depthAttachment.samples = msaaSamples;
@@ -1388,7 +1391,7 @@ fn createDescriptorSetLayout(device: vulkan.VkDevice) !vulkan.VkDescriptorSetLay
     uboLayoutBinding.binding = 0;
     uboLayoutBinding.descriptorType = vulkan.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboLayoutBinding.descriptorCount = 1;
-    uboLayoutBinding.stageFlags = vulkan.VK_SHADER_STAGE_VERTEX_BIT;
+    uboLayoutBinding.stageFlags = vulkan.VK_SHADER_STAGE_FRAGMENT_BIT;
     uboLayoutBinding.pImmutableSamplers = null; // Optional
 
     var samplerLayoutBinding = vulkan.VkDescriptorSetLayoutBinding{};
@@ -1447,34 +1450,11 @@ fn createUniformBuffers(varType: anytype, allocator: Allocator, device: vulkan.V
 }
 
 fn updateUniformBuffer(self: *Self, camera: *Camera) !void {
-    const Mat4 = zalgebra.Mat4;
-    const Vector3 = zalgebra.GenericVector(3, f32);
-
-    const up = Vector3.new(0.0, -1.0, 0.0);
-
-    const model = Mat4.identity();
-
-    const yaw = std.math.degreesToRadians(camera.yaw);
-    const pitch = std.math.degreesToRadians(camera.pitch);
-    const x = std.math.sin(yaw) * std.math.cos(pitch);
-    const y = -std.math.sin(pitch);
-    const z = std.math.cos(yaw) * std.math.cos(pitch);
-
-    const pos = Vector3.new(camera.x, camera.y, camera.z);
-    const view = Mat4.lookAt(pos, Vector3.new(x, y, z).norm().add(pos), up);
-    var proj = Mat4.perspective(
-        45,
-        @as(f32, @floatFromInt(self.extent.width)) / @as(f32, @floatFromInt(self.extent.height)),
-        0.5,
-        ZFAR,
-    );
-
-    proj.data[1][1] *= 1;
-
+    // TODO: try as and init resolution at creation time
     var ubo = UniformBufferObject{
-        .view = view,
-        .proj = proj,
-        .model = model,
+        .camera_pos = .{ camera.x, -camera.y, camera.z, std.math.degreesToRadians(45) },
+        .camera_rot = .{ std.math.degreesToRadians(camera.yaw), std.math.degreesToRadians(camera.pitch) },
+        .resolution = .{ @floatFromInt(self.extent.width), @floatFromInt(self.extent.height) },
     };
 
     @memcpy(self.uniformBuffersMapped[self.currentFrame], std.mem.asBytes(&ubo));
