@@ -30,104 +30,104 @@ pub fn putBlock(self: *Self, x: usize, y: usize, z: usize, block: u8) void {
 const vertices = [_]Renderer.Vertex{
     // bottom
     .{
-        .pos = .{ -0.5, -0.5, 0.5 },
+        .pos = .{ 0, 0, 1 },
         .texCoord = .{ 0.0, 0.0 },
     },
     .{
-        .pos = .{ 0.5, -0.5, 0.5 },
+        .pos = .{ 1, 0, 1 },
         .texCoord = .{ 0.5, 0.0 },
     },
     .{
-        .pos = .{ 0.5, -0.5, -0.5 },
+        .pos = .{ 1, 0, 0 },
         .texCoord = .{ 0.5, 1.0 },
     },
     .{
-        .pos = .{ -0.5, -0.5, -0.5 },
+        .pos = .{ 0, 0, 0 },
         .texCoord = .{ 0.0, 1.0 },
     },
     // top
     .{
-        .pos = .{ -0.5, 0.5, 0.5 },
+        .pos = .{ 0, 1, 1 },
         .texCoord = .{ 0.0, 0.0 },
     },
     .{
-        .pos = .{ 0.5, 0.5, 0.5 },
+        .pos = .{ 1, 1, 1 },
         .texCoord = .{ 0.5, 0.0 },
     },
     .{
-        .pos = .{ 0.5, 0.5, -0.5 },
+        .pos = .{ 1, 1, 0 },
         .texCoord = .{ 0.5, 1.0 },
     },
     .{
-        .pos = .{ -0.5, 0.5, -0.5 },
+        .pos = .{ 0, 1, 0 },
         .texCoord = .{ 0.0, 1.0 },
     },
     // north 8-11
     .{
-        .pos = .{ -0.5, -0.5, 0.5 },
+        .pos = .{ 0, 0, 1 },
         .texCoord = .{ 0.5, 1.0 },
     },
     .{
-        .pos = .{ -0.5, 0.5, 0.5 },
+        .pos = .{ 0, 1, 1 },
         .texCoord = .{ 0.5, 0.0 },
     },
     .{
-        .pos = .{ 0.5, 0.5, 0.5 },
+        .pos = .{ 1, 1, 1 },
         .texCoord = .{ 1.0, 0.0 },
     },
     .{
-        .pos = .{ 0.5, -0.5, 0.5 },
+        .pos = .{ 1, 0, 1 },
         .texCoord = .{ 1.0, 1.0 },
     },
     // east 12-15
     .{
-        .pos = .{ 0.5, -0.5, -0.5 },
+        .pos = .{ 1, 0, 0 },
         .texCoord = .{ 1.0, 1.0 },
     },
     .{
-        .pos = .{ 0.5, 0.5, -0.5 },
+        .pos = .{ 1, 1, 0 },
         .texCoord = .{ 1.0, 0.0 },
     },
     .{
-        .pos = .{ 0.5, 0.5, 0.5 },
+        .pos = .{ 1, 1, 1 },
         .texCoord = .{ 0.5, 0.0 },
     },
     .{
-        .pos = .{ 0.5, -0.5, 0.5 },
+        .pos = .{ 1, 0, 1 },
         .texCoord = .{ 0.5, 1.0 },
     },
     // south 16-19
     .{
-        .pos = .{ -0.5, -0.5, -0.5 },
+        .pos = .{ 0, 0, 0 },
         .texCoord = .{ 1.0, 1.0 },
     },
     .{
-        .pos = .{ -0.5, 0.5, -0.5 },
+        .pos = .{ 0, 1, 0 },
         .texCoord = .{ 1.0, 0.0 },
     },
     .{
-        .pos = .{ 0.5, 0.5, -0.5 },
+        .pos = .{ 1, 1, 0 },
         .texCoord = .{ 0.5, 0.0 },
     },
     .{
-        .pos = .{ 0.5, -0.5, -0.5 },
+        .pos = .{ 1, 0, 0 },
         .texCoord = .{ 0.5, 1.0 },
     },
     // 20-23
     .{
-        .pos = .{ -0.5, -0.5, -0.5 },
+        .pos = .{ 0, 0, 0 },
         .texCoord = .{ 0.5, 1.0 },
     },
     .{
-        .pos = .{ -0.5, 0.5, -0.5 },
+        .pos = .{ 0, 1, 0 },
         .texCoord = .{ 0.5, 0.0 },
     },
     .{
-        .pos = .{ -0.5, 0.5, 0.5 },
+        .pos = .{ 0, 1, 1 },
         .texCoord = .{ 1.0, 0.0 },
     },
     .{
-        .pos = .{ -0.5, -0.5, 0.5 },
+        .pos = .{ 0, 0, 1 },
         .texCoord = .{ 1.0, 1.0 },
     },
 };
@@ -147,7 +147,7 @@ const indices = [_]u16{
     20, 21, 22, 22, 23, 20,
 };
 
-pub fn getMesh(self: *Self, mesh: []Renderer.Vertex, index_buffer: []u32) struct { usize, usize } {
+pub fn getMesh(self: *Self, mesh: []Renderer.Vertex, index_buffer: []u32, base_index: usize) struct { usize, usize } {
     var vertex_buffer_count: usize = 0;
     var index_buffer_count: usize = 0;
 
@@ -155,21 +155,22 @@ pub fn getMesh(self: *Self, mesh: []Renderer.Vertex, index_buffer: []u32) struct
         if (elem > 0) {
             const real_pos = getPos(pos);
 
-            const init_index = vertex_buffer_count;
+            const blockX = @as(f32, @floatFromInt(real_pos[0])) + self.position[0] * 32.0;
+            const blockY = @as(f32, @floatFromInt(real_pos[1])) + self.position[1] * 32.0;
+            const blockZ = @as(f32, @floatFromInt(real_pos[2])) + self.position[2] * 32.0;
+
+            for (indices) |i| {
+                index_buffer[index_buffer_count] = @intCast(vertex_buffer_count + @as(usize, i) + base_index);
+                index_buffer_count += 1;
+            }
 
             for (vertices) |v| {
                 mesh[vertex_buffer_count] = v;
-
-                mesh[vertex_buffer_count].pos[0] += @as(f32, @floatFromInt(real_pos[0])) + self.position[0] * 32.0;
-                mesh[vertex_buffer_count].pos[1] += @as(f32, @floatFromInt(real_pos[1])) + self.position[1] * 32.0;
-                mesh[vertex_buffer_count].pos[2] += @as(f32, @floatFromInt(real_pos[2])) + self.position[2] * 32.0;
+                mesh[vertex_buffer_count].pos[0] += blockX;
+                mesh[vertex_buffer_count].pos[1] += blockY;
+                mesh[vertex_buffer_count].pos[2] += blockZ;
 
                 vertex_buffer_count += 1;
-            }
-
-            for (indices) |i| {
-                index_buffer[index_buffer_count] = @intCast(init_index + i);
-                index_buffer_count += 1;
             }
         }
     }

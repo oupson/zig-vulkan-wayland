@@ -35,9 +35,9 @@ const Self = @This();
 pub const Camera = struct {
     yaw: f32 = 0,
     pitch: f32 = 0,
-    x: f32 = 16.5,
-    y: f32 = 1,
-    z: f32 = 16.5,
+    x: f32 = 0.0,
+    y: f32 = 1.0,
+    z: f32 = 0.0,
 };
 
 pub const Instance = struct {
@@ -362,7 +362,6 @@ pub fn deinit(self: *const Self) !void {
 
 pub fn draw(self: *Self, camera: *Camera) !void {
     if (vulkan.VK_SUCCESS != vulkan.vkWaitForFences(self.device, 1, &self.inFlightFences[self.currentFrame], vulkan.VK_TRUE, std.math.maxInt(u64))) return error.VulkanError;
-
     var imageIndex: u32 = 0;
 
     if (vulkan.VK_SUCCESS != vulkan.vkAcquireNextImageKHR(
@@ -1466,7 +1465,7 @@ fn updateUniformBuffer(self: *Self, camera: *Camera) !void {
     var proj = Mat4.perspective(
         45,
         @as(f32, @floatFromInt(self.extent.width)) / @as(f32, @floatFromInt(self.extent.height)),
-        0.1,
+        0.5,
         ZFAR,
     );
 
