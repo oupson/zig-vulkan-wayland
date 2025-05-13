@@ -79,10 +79,16 @@ const Vertex = struct {
     }
 };
 
+const CHUNK_SIZE = 32 * 32 * 32;
+
 const UniformBufferObject = extern struct {
     camera_pos: @Vector(4, f32) align(4),
     camera_rot: @Vector(2, f32) align(2),
     resolution: @Vector(2, f32) align(2),
+};
+
+const VoxelsBuffer = extern struct {
+    voxels: [CHUNK_SIZE * 10 * 10 * 10]u32 = undefined,
 };
 
 allocator: Allocator,
@@ -125,6 +131,9 @@ colorImage: vulkan.VkImage,
 colorImageMemory: vulkan.VkDeviceMemory,
 colorImageView: vulkan.VkImageView,
 indexCount: u32,
+voxelsBuffers: []vulkan.VkBuffer,
+voxelsBuffersMemory: []vulkan.VkDeviceMemory,
+voxelsBuffersMapped: [][]u8,
 
 pub fn new(
     vulkanInstance: Instance,
@@ -232,10 +241,33 @@ pub fn new(
         graphicQueue,
         @ptrCast(@constCast(&index)),
     );
-    const uniformBuffers, const uniformBuffersMemory, const uniformBuffersMapped = try createUniformBuffers(UniformBufferObject, allocator, device, physicalDevice);
+    const uniformBuffers, const uniformBuffersMemory, const uniformBuffersMapped = try createUniformBuffers(
+        UniformBufferObject,
+        allocator,
+        device,
+        physicalDevice,
+        vulkan.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+    );
+
+    const voxelsBuffers, const voxelsBuffersMemory, const voxelsBuffersMapped = try createUniformBuffers(
+        VoxelsBuffer,
+        allocator,
+        device,
+        physicalDevice,
+        vulkan.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+    );
 
     const descriptorPool = try createDescriptorPool(device);
-    const descriptorSets = try createDescriptorSet(allocator, device, descriptorPool, uniformBuffers, descriptorSetLayout, textureImageView, textureSampler);
+    const descriptorSets = try createDescriptorSet(
+        allocator,
+        device,
+        descriptorPool,
+        uniformBuffers,
+        descriptorSetLayout,
+        textureImageView,
+        textureSampler,
+        voxelsBuffers,
+    );
 
     const commandBuffers = try createCommandBuffers(allocator, device, commandPool);
     const imageAvailableSemaphores, const renderFinishedSemaphores, const inFlightFences = try createSyncObjects(allocator, device);
@@ -279,6 +311,9 @@ pub fn new(
         .colorImageMemory = colorImageMemory,
         .colorImageView = colorImageView,
         .indexCount = @intCast(index.len),
+        .voxelsBuffers = voxelsBuffers,
+        .voxelsBuffersMapped = voxelsBuffersMapped,
+        .voxelsBuffersMemory = voxelsBuffersMemory,
     };
 }
 
@@ -310,10 +345,15 @@ pub fn deinit(self: *const Self) !void {
     for (0..MAX_FRAMES_IN_FLIGHT) |i| {
         vulkan.vkDestroyBuffer(self.device, self.uniformBuffers[i], null);
         vulkan.vkFreeMemory(self.device, self.uniformBuffersMemory[i], null);
+        vulkan.vkDestroyBuffer(self.device, self.voxelsBuffers[i], null);
+        vulkan.vkFreeMemory(self.device, self.voxelsBuffersMemory[i], null);
     }
     self.allocator.free(self.uniformBuffers);
     self.allocator.free(self.uniformBuffersMemory);
     self.allocator.free(self.uniformBuffersMapped);
+    self.allocator.free(self.voxelsBuffers);
+    self.allocator.free(self.voxelsBuffersMemory);
+    self.allocator.free(self.voxelsBuffersMapped);
 
     vulkan.vkDestroyDescriptorSetLayout(self.device, self.descriptorSetLayout, null);
     vulkan.vkDestroyDescriptorPool(self.device, self.descriptorPool, null);
@@ -1401,7 +1441,14 @@ fn createDescriptorSetLayout(device: vulkan.VkDevice) !vulkan.VkDescriptorSetLay
     samplerLayoutBinding.pImmutableSamplers = null;
     samplerLayoutBinding.stageFlags = vulkan.VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    const bindings = [_]vulkan.VkDescriptorSetLayoutBinding{ uboLayoutBinding, samplerLayoutBinding };
+    var voxelBindings = vulkan.VkDescriptorSetLayoutBinding{};
+    voxelBindings.binding = 2;
+    voxelBindings.descriptorCount = 1;
+    voxelBindings.descriptorType = vulkan.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    voxelBindings.pImmutableSamplers = null;
+    voxelBindings.stageFlags = vulkan.VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    const bindings = [_]vulkan.VkDescriptorSetLayoutBinding{ uboLayoutBinding, samplerLayoutBinding, voxelBindings };
 
     var layoutInfo = vulkan.VkDescriptorSetLayoutCreateInfo{};
     layoutInfo.sType = vulkan.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -1416,7 +1463,7 @@ fn createDescriptorSetLayout(device: vulkan.VkDevice) !vulkan.VkDescriptorSetLay
     return descriptorSetLayout;
 }
 
-fn createUniformBuffers(varType: anytype, allocator: Allocator, device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDevice) !struct {
+fn createUniformBuffers(varType: anytype, allocator: Allocator, device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDevice, usage: vulkan.VkBufferUsageFlags) !struct {
     []vulkan.VkBuffer,
     []vulkan.VkDeviceMemory,
     [][]u8,
@@ -1432,7 +1479,7 @@ fn createUniformBuffers(varType: anytype, allocator: Allocator, device: vulkan.V
             device,
             physicalDevice,
             bufferSize,
-            vulkan.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            usage,
             vulkan.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vulkan.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         );
 
@@ -1449,28 +1496,30 @@ fn createUniformBuffers(varType: anytype, allocator: Allocator, device: vulkan.V
     return .{ uniformBuffers, uniformBuffersMemory, uniformBuffersMapped };
 }
 
-fn updateUniformBuffer(self: *Self, camera: *Camera) !void {
-    // TODO: try as and init resolution at creation time
-    var ubo = UniformBufferObject{
-        .camera_pos = .{ camera.x, -camera.y, camera.z, std.math.degreesToRadians(45) },
-        .camera_rot = .{ std.math.degreesToRadians(camera.yaw), std.math.degreesToRadians(camera.pitch) },
-        .resolution = .{ @floatFromInt(self.extent.width), @floatFromInt(self.extent.height) },
-    };
+const Chunk = @import("chunk.zig");
 
-    @memcpy(self.uniformBuffersMapped[self.currentFrame], std.mem.asBytes(&ubo));
+var a = true;
+
+fn updateUniformBuffer(self: *Self, camera: *Camera) !void {
+    const ubo: *UniformBufferObject = @alignCast(@ptrCast(self.uniformBuffersMapped[self.currentFrame]));
+
+    // TODO: init resolution at creation time
+    ubo.camera_pos = .{ camera.x, -camera.y, camera.z, std.math.degreesToRadians(45) };
+    ubo.camera_rot = .{ std.math.degreesToRadians(camera.yaw), std.math.degreesToRadians(camera.pitch) };
+    ubo.resolution = .{ @floatFromInt(self.extent.width), @floatFromInt(self.extent.height) };
 }
 
 fn createDescriptorPool(device: vulkan.VkDevice) !vulkan.VkDescriptorPool {
-    var poolSizes = [_]vulkan.VkDescriptorPoolSize{
-        .{
-            .type = vulkan.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .descriptorCount = MAX_FRAMES_IN_FLIGHT,
-        },
-        .{
-            .type = vulkan.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = MAX_FRAMES_IN_FLIGHT,
-        },
-    };
+    var poolSizes = [_]vulkan.VkDescriptorPoolSize{ .{
+        .type = vulkan.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+    }, .{
+        .type = vulkan.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+    }, .{
+        .type = vulkan.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+    } };
 
     var poolInfo = vulkan.VkDescriptorPoolCreateInfo{};
     poolInfo.sType = vulkan.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1494,6 +1543,7 @@ fn createDescriptorSet(
     descriptorSetLayout: vulkan.VkDescriptorSetLayout,
     textureImageView: vulkan.VkImageView,
     textureSampler: vulkan.VkSampler,
+    voxelsBuffers: []vulkan.VkBuffer,
 ) ![]vulkan.VkDescriptorSet {
     var layouts: [MAX_FRAMES_IN_FLIGHT]vulkan.VkDescriptorSetLayout = .{ descriptorSetLayout, descriptorSetLayout };
 
@@ -1519,7 +1569,12 @@ fn createDescriptorSet(
         imageInfo.imageView = textureImageView;
         imageInfo.sampler = textureSampler;
 
-        var descriptorWrites = [2]vulkan.VkWriteDescriptorSet{
+        var voxelsInfo = vulkan.VkDescriptorBufferInfo{};
+        voxelsInfo.buffer = voxelsBuffers[i];
+        voxelsInfo.offset = 0;
+        voxelsInfo.range = @sizeOf(VoxelsBuffer);
+
+        var descriptorWrites = [_]vulkan.VkWriteDescriptorSet{
             .{
                 .sType = vulkan.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .dstSet = descriptorSets[i],
@@ -1542,9 +1597,20 @@ fn createDescriptorSet(
                 .pImageInfo = &imageInfo, // Optional
                 .pTexelBufferView = null, // Optional
             },
+            .{
+                .sType = vulkan.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = descriptorSets[i],
+                .dstBinding = 2,
+                .dstArrayElement = 0,
+                .descriptorType = vulkan.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .pBufferInfo = &voxelsInfo,
+                .pImageInfo = null, // Optional
+                .pTexelBufferView = null, // Optional
+            },
         };
 
-        vulkan.vkUpdateDescriptorSets(device, 2, &descriptorWrites, 0, null);
+        vulkan.vkUpdateDescriptorSets(device, descriptorWrites.len, &descriptorWrites, 0, null);
     }
     return descriptorSets;
 }
