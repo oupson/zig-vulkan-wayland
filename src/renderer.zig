@@ -2209,3 +2209,18 @@ fn createColorResources(
     const colorImageView = try createImageView(device, colorImage, colorFormat, vulkan.VK_IMAGE_ASPECT_COLOR_BIT, 1);
     return .{ colorImage, colorImageMemory, colorImageView };
 }
+
+pub fn updateWorld(self: *Self, world: [][10][10]Chunk) void {
+    for (0..MAX_FRAMES_IN_FLIGHT) |f| {
+        const vox: *VoxelsBuffer = @alignCast(@ptrCast(self.voxelsBuffersMapped[f]));
+
+        for (0..10) |z| {
+            for (0..10) |y| {
+                for (0..10) |x| {
+                    const chunk = &world[z][y][x];
+                    @memcpy(vox.voxels[(z * 10 * 10 + y * 10 + x) * CHUNK_SIZE ..][0..CHUNK_SIZE], chunk.elements[0..CHUNK_SIZE]);
+                }
+            }
+        }
+    }
+}
