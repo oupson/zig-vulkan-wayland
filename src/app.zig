@@ -48,16 +48,38 @@ recreate: bool = false,
 renderer: ?Renderer = null,
 lastFrame: std.time.Instant,
 camera: Renderer.Camera = .{},
+world: [][10][10]Chunk,
 
 const Self = @This();
 
 pub fn init(allocator: Allocator) !Self {
     const vulkanInstance = try Renderer.Instance.init(allocator);
+
+    const world = try allocator.alloc([10][10]Chunk, 10);
+
+    for (0..10) |zchunk| {
+        for (0..10) |xchunk| {
+            for (0..10) |ychunk| {
+                var c = &world[zchunk][ychunk][xchunk];
+                for (0..c.elements.len) |i| {
+                    c.elements[i] = 0;
+                }
+
+                for (0..32) |x| {
+                    for (0..32) |z| {
+                        c.putBlock(x, 0, z, 1);
+                    }
+                }
+            }
+        }
+    }
+
     const self = Self{
         .allocator = allocator,
         .vulkanInstance = vulkanInstance,
         .running = true,
         .lastFrame = try std.time.Instant.now(),
+        .world = world,
     };
 
     return self;
@@ -127,6 +149,7 @@ pub fn deinit(self: *Self) void {
     self.context.surface.destroy();
     self.context.registry.destroy();
     self.context.display.disconnect();
+    self.allocator.free(self.world);
 }
 
 const LOS = 2;
@@ -144,6 +167,7 @@ pub fn dispatch(self: *Self) !void {
             self.width,
             self.height,
         );
+        self.renderer.?.updateWorld(self.world);
         self.recreate = false;
     }
 
