@@ -15,14 +15,17 @@ const validationLayerName: [1][:0]const u8 = .{
     "VK_LAYER_KHRONOS_validation",
 };
 
-const deviceExtensions: [1]*align(1) const [:0]u8 = .{
+const deviceExtensions: [3]*align(1) const [:0]u8 = .{
     @ptrCast(vulkan.VK_KHR_SWAPCHAIN_EXTENSION_NAME),
+    @ptrCast(vulkan.VK_KHR_MAINTENANCE_3_EXTENSION_NAME),
+    @ptrCast(vulkan.VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME),
 };
 
-const requiredExtensions: [3]*align(1) const [:0]u8 = .{
+const requiredExtensions: [4]*align(1) const [:0]u8 = .{
     @ptrCast(vulkan.VK_KHR_SURFACE_EXTENSION_NAME),
     @ptrCast(vulkan.VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME),
     @ptrCast(vulkan.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME),
+    @ptrCast(vulkan.VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME),
 };
 
 const MAILBOX: bool = false;
@@ -657,9 +660,18 @@ fn createDevice(physicalDevice: vulkan.VkPhysicalDevice, familyIndice: QueueFami
 
     var deviceFeatures = vulkan.VkPhysicalDeviceFeatures{};
     deviceFeatures.samplerAnisotropy = vulkan.VK_TRUE;
+    deviceFeatures.shaderSampledImageArrayDynamicIndexing = vulkan.VK_TRUE;
+
+    const deviceFeatures12 = vulkan.VkPhysicalDeviceVulkan12Features{
+        .sType = vulkan.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+        .descriptorIndexing = vulkan.VK_TRUE,
+        .runtimeDescriptorArray = vulkan.VK_TRUE,
+        .shaderSampledImageArrayNonUniformIndexing = vulkan.VK_TRUE,
+    };
 
     var createInfo = vulkan.VkDeviceCreateInfo{};
     createInfo.sType = vulkan.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    createInfo.pNext = &deviceFeatures12;
 
     createInfo.pQueueCreateInfos = &infos;
     createInfo.queueCreateInfoCount = count;
