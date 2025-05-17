@@ -67,7 +67,7 @@ pub fn init(allocator: Allocator) !Self {
 
                 for (0..32) |x| {
                     for (0..32) |z| {
-                        c.putBlock(x, 0, z, 1);
+                        c.putBlock(x, 0, z, if (std.crypto.random.boolean()) 1 else 2);
                     }
                 }
             }

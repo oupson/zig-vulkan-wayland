@@ -96,6 +96,7 @@ const VoxelsBuffer = extern struct {
 
 const textureInfos = [_]TextureInfo{
     .{ .pixels = @embedFile("stone.rgba"), .width = 128 * 2, .height = 128, .channels = 4 },
+    .{ .pixels = @embedFile("ugly-stone.rgba"), .width = 32, .height = 32, .channels = 4 },
 };
 
 allocator: Allocator,
