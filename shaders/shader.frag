@@ -1,12 +1,16 @@
 #version 450
 
-layout(binding = 1) uniform sampler2D texSampler;
+#extension GL_EXT_nonuniform_qualifier : require
+
+#define DEBUG true
 
 layout(binding = 0) uniform UniformBufferObject {
     vec4 cameraPos;
     vec2 cameraRot;
     vec2 resolution;
 } ubo;
+
+layout(binding = 1) uniform sampler2D texSampler[];
 
 layout(std430, binding = 2) readonly buffer VoxelsBuffer {
     uint voxels[32 * 32 * 32 * 10 * 10 * 10];
@@ -28,10 +32,10 @@ mat2 rot2D(float angle) {
 }
 
 bvec3 isEqual(vec3 a, vec3 b) {
-    return lessThan(abs(a - b), vec3(0.001));
+    return lessThan(abs(a - b), vec3(0.0001));
 }
 
-bool get_voxel(ivec3 pos) {
+uint get_voxel(ivec3 pos) {
     ivec3 real_pos = pos + 5 * 32;
 
     ivec3 chunk_pos = real_pos / 32;
@@ -41,7 +45,12 @@ bool get_voxel(ivec3 pos) {
     int chunk_in_index =
         inpos.z * 32 * 32 + inpos.y * 32 + inpos.x;
 
-    return all(greaterThanEqual(real_pos, ivec3(0))) && voxels.voxels[(chunk_index * 32 * 32 * 32) + chunk_in_index] != 0;
+    // TODO: Proper bound check
+    if (!all(greaterThanEqual(real_pos, ivec3(0)))) {
+        return 0;
+    } else {
+        return voxels.voxels[(chunk_index * 32 * 32 * 32) + chunk_in_index];
+    }
 }
 
 #define MAX_RAY_STEPS 64
@@ -53,6 +62,7 @@ vec3 raytrace(vec3 ray_pos, vec3 ray_dir) {
     bvec3 mask;
 
     vec3 delta_dist;
+    uint voxel;
     {
         delta_dist = 1.0 / abs(ray_dir);
         ivec3 ray_step = ivec3(sign(ray_dir));
@@ -61,7 +71,8 @@ vec3 raytrace(vec3 ray_pos, vec3 ray_dir) {
         int i;
         for (i = 0; i < MAX_RAY_STEPS; i++)
         {
-            if (get_voxel(map_pos)) break;
+            voxel = get_voxel(map_pos);
+            if (voxel != 0) break;
 
             mask = lessThanEqual(side_dist.xyz, min(side_dist.yzx, side_dist.zxy));
             side_dist += vec3(mask) * delta_dist;
@@ -84,12 +95,26 @@ vec3 raytrace(vec3 ray_pos, vec3 ray_dir) {
     vec3 normals = vec3(isEqual(voxel_pos, dst)) * -1.0
             + vec3(isEqual(voxel_pos + 1.0, dst));
 
-    if (normals.z == -1 || normals.z == 1) {
-        color *= texture(texSampler, dst.xy).xyz;
-    } else if (normals.y == -1 || normals.y == 1) {
-        color *= texture(texSampler, dst.xz).xyz;
+    dst = dst - vec3(map_pos);
+    bvec3 faces = notEqual(normals, vec3(0.0));
+    vec2 facePosition;
+    if (faces.z) {
+        facePosition = dst.xy;
+    } else if (faces.y) {
+        facePosition = dst.xz;
     } else {
-        color *= texture(texSampler, dst.yz).xyz;
+        facePosition = dst.yz;
+    }
+
+    uint samplerIndex = voxel - 1;
+    color *= texture(texSampler[nonuniformEXT(samplerIndex)], facePosition.xy).xyz;
+
+    if (DEBUG) {
+        if (any(lessThanEqual(facePosition, vec2(0.008)))) {
+            color = vec3(0.0, 1.0, 0.0);
+        } else if (any(greaterThanEqual(facePosition, vec2(0.992)))) {
+            color = vec3(1.0, 0.0, 0.0);
+        }
     }
 
     return color;
