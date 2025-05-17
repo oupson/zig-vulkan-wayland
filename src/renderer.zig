@@ -1,8 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const zalgebra = @import("zalgebra");
-
 const vulkan = @cImport({
     @cInclude("vulkan/vulkan.h");
     @cInclude("vulkan/vulkan_wayland.h");
@@ -14,6 +12,8 @@ const wl = wayland.client.wl;
 const validationLayerName: [1][:0]const u8 = .{
     "VK_LAYER_KHRONOS_validation",
 };
+
+const Chunk = @import("chunk.zig");
 
 const deviceExtensions: [3]*align(1) const [:0]u8 = .{
     @ptrCast(vulkan.VK_KHR_SWAPCHAIN_EXTENSION_NAME),
@@ -322,7 +322,6 @@ pub fn new(
 
 // todo partial deinit
 pub fn deinit(self: *const Self) !void {
-    std.log.info("deinit", .{});
     if (vulkan.VK_SUCCESS != vulkan.vkDeviceWaitIdle(self.device)) return error.VulkanError;
 
     vulkan.vkDestroyImageView(self.device, self.colorImageView, null);
@@ -1507,10 +1506,6 @@ fn createUniformBuffers(varType: anytype, allocator: Allocator, device: vulkan.V
 
     return .{ uniformBuffers, uniformBuffersMemory, uniformBuffersMapped };
 }
-
-const Chunk = @import("chunk.zig");
-
-var a = true;
 
 fn updateUniformBuffer(self: *Self, camera: *Camera) !void {
     const ubo: *UniformBufferObject = @alignCast(@ptrCast(self.uniformBuffersMapped[self.currentFrame]));
