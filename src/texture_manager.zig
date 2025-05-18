@@ -53,6 +53,15 @@ const voxelsInfos = [_]VoxelInfo{
         .height = 32,
         .channels = 4,
     },
+    .{
+        .pixels = &[_][]const u8{
+            @embedFile("ugly-wood-top.rgba"),
+            @embedFile("ugly-wood.rgba"),
+        },
+        .width = 32,
+        .height = 32,
+        .channels = 4,
+    },
 };
 
 const Self = @This();
