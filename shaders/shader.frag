@@ -16,6 +16,10 @@ layout(std430, binding = 2) readonly buffer VoxelsBuffer {
     uint voxels[32 * 32 * 32 * 10 * 10 * 10];
 } voxels;
 
+layout(std430, binding = 3) readonly buffer TextureInfos {
+    uint textureIndex[];
+} textureInfos;
+
 layout(location = 0) out vec4 outColor;
 
 // Rodrigues rotation
@@ -98,15 +102,19 @@ vec3 raytrace(vec3 ray_pos, vec3 ray_dir) {
     dst = dst - vec3(map_pos);
     bvec3 faces = notEqual(normals, vec3(0.0));
     vec2 facePosition;
+    int faceTextureIndex;
     if (faces.z) {
         facePosition = dst.xy;
+        faceTextureIndex = 2 + (1 + int(normals.z)) / 2;
     } else if (faces.y) {
         facePosition = dst.xz;
+        faceTextureIndex = 0 + (1 + int(normals.y)) / 2;
     } else {
-        facePosition = dst.yz;
+        facePosition = dst.zy;
+        faceTextureIndex = 4 + (1 + int(normals.x)) / 2;
     }
 
-    uint samplerIndex = voxel - 1;
+    uint samplerIndex = textureInfos.textureIndex[(voxel - 1) * 6 + faceTextureIndex];
     color *= texture(texSampler[nonuniformEXT(samplerIndex)], facePosition.xy).xyz;
 
     if (DEBUG) {

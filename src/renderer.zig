@@ -148,6 +148,9 @@ indexCount: u32,
 voxelsBuffers: []vulkan.VkBuffer,
 voxelsBuffersMemory: []vulkan.VkDeviceMemory,
 voxelsBuffersMapped: [][]u8,
+textureInfoBuffers: []vulkan.VkBuffer,
+textureInfoBuffersMemory: []vulkan.VkDeviceMemory,
+textureInfoBuffersMapped: [][]u8,
 
 pub fn new(
     vulkanInstance: Instance,
@@ -231,11 +234,18 @@ pub fn new(
 
     var textures = std.MultiArrayList(Texture).empty;
 
+    var textureIndexList = try allocator.alloc(
+        u32,
+        textureManager.getVoxelCount() * 6,
+    );
+    defer allocator.free(textureIndexList);
+
     // TODO: Check if multiple sampler is a good idea
     var textureSamplers = std.ArrayListUnmanaged(vulkan.VkSampler).empty;
 
     {
         var index = @as(usize, 0);
+        var textureIndex = @as(u32, 0);
         while (textureManager.getVoxelInfo(index)) |info| : (index += 1) {
             for (info.pixels) |pixels| {
                 const textureImage, const textureImageMemory, const mipLevels = try createTextureImage(
@@ -258,6 +268,7 @@ pub fn new(
                 });
                 try textureSamplers.append(allocator, textureSampler);
             }
+            textureIndex = info.fillIndex(textureIndexList[index * 6 ..][0..6], textureIndex);
         }
     }
 
@@ -294,6 +305,7 @@ pub fn new(
         vulkan.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
     );
 
+    // TODO: one time transfer so don't keep mapping / change location
     const voxelsBuffers, const voxelsBuffersMemory, const voxelsBuffersMapped = try createUniformBuffers(
         VoxelsBuffer,
         allocator,
@@ -301,6 +313,19 @@ pub fn new(
         physicalDevice,
         vulkan.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
     );
+
+    const textureInfoBuffers, const textureInfoBuffersMemory, const textureInfoBuffersMapped = try createUniformBuffersWithSize(
+        @sizeOf(u32) * textureIndexList.len,
+        allocator,
+        device,
+        physicalDevice,
+        vulkan.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+    );
+
+    for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+        @memcpy(@as([]u32, @ptrCast(@alignCast(textureInfoBuffersMapped[i]))), textureIndexList);
+        vulkan.vkUnmapMemory(device, textureInfoBuffersMemory[i]);
+    }
 
     const descriptorPool = try createDescriptorPool(device, textureCount);
     const descriptorSets = try createDescriptorSet(
@@ -312,6 +337,8 @@ pub fn new(
         textures.items(.imageView),
         textureSamplers.items,
         voxelsBuffers,
+        textureInfoBuffers,
+        @intCast(textureIndexList.len),
     );
 
     const commandBuffers = try createCommandBuffers(allocator, device, commandPool);
@@ -353,10 +380,13 @@ pub fn new(
         .colorImage = colorImage,
         .colorImageMemory = colorImageMemory,
         .colorImageView = colorImageView,
-        .indexCount = @intCast(index.len),
+        .indexCount = @intCast(index.len), // TODO : remove
         .voxelsBuffers = voxelsBuffers,
         .voxelsBuffersMapped = voxelsBuffersMapped,
         .voxelsBuffersMemory = voxelsBuffersMemory,
+        .textureInfoBuffers = textureInfoBuffers,
+        .textureInfoBuffersMapped = textureInfoBuffersMapped,
+        .textureInfoBuffersMemory = textureInfoBuffersMemory,
     };
 }
 
@@ -397,6 +427,8 @@ pub fn deinit(self: *Self) !void {
         vulkan.vkFreeMemory(self.device, self.uniformBuffersMemory[i], null);
         vulkan.vkDestroyBuffer(self.device, self.voxelsBuffers[i], null);
         vulkan.vkFreeMemory(self.device, self.voxelsBuffersMemory[i], null);
+        vulkan.vkDestroyBuffer(self.device, self.textureInfoBuffers[i], null);
+        vulkan.vkFreeMemory(self.device, self.textureInfoBuffersMemory[i], null);
     }
     self.allocator.free(self.uniformBuffers);
     self.allocator.free(self.uniformBuffersMemory);
@@ -404,6 +436,9 @@ pub fn deinit(self: *Self) !void {
     self.allocator.free(self.voxelsBuffers);
     self.allocator.free(self.voxelsBuffersMemory);
     self.allocator.free(self.voxelsBuffersMapped);
+    self.allocator.free(self.textureInfoBuffers);
+    self.allocator.free(self.textureInfoBuffersMemory);
+    self.allocator.free(self.textureInfoBuffersMapped);
 
     vulkan.vkDestroyDescriptorSetLayout(self.device, self.descriptorSetLayout, null);
     vulkan.vkDestroyDescriptorPool(self.device, self.descriptorPool, null);
@@ -1507,7 +1542,19 @@ fn createDescriptorSetLayout(device: vulkan.VkDevice, textureCount: u32) !vulkan
     voxelBindings.pImmutableSamplers = null;
     voxelBindings.stageFlags = vulkan.VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    const bindings = [_]vulkan.VkDescriptorSetLayoutBinding{ uboLayoutBinding, samplerLayoutBinding, voxelBindings };
+    var textureInfosBinding = vulkan.VkDescriptorSetLayoutBinding{};
+    textureInfosBinding.binding = 3;
+    textureInfosBinding.descriptorCount = 1;
+    textureInfosBinding.descriptorType = vulkan.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    textureInfosBinding.pImmutableSamplers = null;
+    textureInfosBinding.stageFlags = vulkan.VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    const bindings = [_]vulkan.VkDescriptorSetLayoutBinding{
+        uboLayoutBinding,
+        samplerLayoutBinding,
+        voxelBindings,
+        textureInfosBinding,
+    };
 
     var layoutInfo = vulkan.VkDescriptorSetLayoutCreateInfo{};
     layoutInfo.sType = vulkan.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -1527,8 +1574,14 @@ fn createUniformBuffers(varType: anytype, allocator: Allocator, device: vulkan.V
     []vulkan.VkDeviceMemory,
     [][]u8,
 } {
-    const bufferSize = @sizeOf(varType);
+    return createUniformBuffersWithSize(@sizeOf(varType), allocator, device, physicalDevice, usage);
+}
 
+fn createUniformBuffersWithSize(bufferSize: usize, allocator: Allocator, device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysicalDevice, usage: vulkan.VkBufferUsageFlags) !struct {
+    []vulkan.VkBuffer,
+    []vulkan.VkDeviceMemory,
+    [][]u8,
+} {
     const uniformBuffers = try allocator.alloc(vulkan.VkBuffer, MAX_FRAMES_IN_FLIGHT);
     const uniformBuffersMemory = try allocator.alloc(vulkan.VkDeviceMemory, MAX_FRAMES_IN_FLIGHT);
     const uniformBuffersMapped = try allocator.alloc([]u8, MAX_FRAMES_IN_FLIGHT);
@@ -1565,16 +1618,24 @@ fn updateUniformBuffer(self: *Self, camera: *Camera) !void {
 }
 
 fn createDescriptorPool(device: vulkan.VkDevice, textureCount: u32) !vulkan.VkDescriptorPool {
-    var poolSizes = [_]vulkan.VkDescriptorPoolSize{ .{
-        .type = vulkan.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        .descriptorCount = MAX_FRAMES_IN_FLIGHT,
-    }, .{
-        .type = vulkan.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .descriptorCount = MAX_FRAMES_IN_FLIGHT * textureCount,
-    }, .{
-        .type = vulkan.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        .descriptorCount = MAX_FRAMES_IN_FLIGHT,
-    } };
+    var poolSizes = [_]vulkan.VkDescriptorPoolSize{
+        .{
+            .type = vulkan.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+        },
+        .{
+            .type = vulkan.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = MAX_FRAMES_IN_FLIGHT * textureCount,
+        },
+        .{
+            .type = vulkan.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+        },
+        .{
+            .type = vulkan.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+        },
+    };
 
     var poolInfo = vulkan.VkDescriptorPoolCreateInfo{};
     poolInfo.sType = vulkan.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1599,6 +1660,8 @@ fn createDescriptorSet(
     textureImageViews: []vulkan.VkImageView,
     textureSamplers: []vulkan.VkSampler,
     voxelsBuffers: []vulkan.VkBuffer,
+    textureBuffers: []vulkan.VkBuffer,
+    textureBufferLength: u32,
 ) ![]vulkan.VkDescriptorSet {
     var layouts: [MAX_FRAMES_IN_FLIGHT]vulkan.VkDescriptorSetLayout = .{ descriptorSetLayout, descriptorSetLayout };
 
@@ -1634,6 +1697,11 @@ fn createDescriptorSet(
         voxelsInfo.offset = 0;
         voxelsInfo.range = @sizeOf(VoxelsBuffer);
 
+        var textureInfo = vulkan.VkDescriptorBufferInfo{};
+        textureInfo.buffer = textureBuffers[i];
+        textureInfo.offset = 0;
+        textureInfo.range = @sizeOf(u32) * textureBufferLength;
+
         var descriptorWrites = [_]vulkan.VkWriteDescriptorSet{
             .{
                 .sType = vulkan.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -1665,6 +1733,17 @@ fn createDescriptorSet(
                 .descriptorType = vulkan.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                 .descriptorCount = 1,
                 .pBufferInfo = &voxelsInfo,
+                .pImageInfo = null, // Optional
+                .pTexelBufferView = null, // Optional
+            },
+            .{
+                .sType = vulkan.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = descriptorSets[i],
+                .dstBinding = 3,
+                .dstArrayElement = 0,
+                .descriptorType = vulkan.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .pBufferInfo = &textureInfo,
                 .pImageInfo = null, // Optional
                 .pTexelBufferView = null, // Optional
             },

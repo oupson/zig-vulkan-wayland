@@ -7,7 +7,7 @@ const VoxelInfo = struct {
     height: u32,
     channels: u32,
 
-    pub fn fillIndex(self: *@This(), index: [6]u32, start: u32) u32 {
+    pub fn fillIndex(self: *const @This(), index: *[6]u32, start: u32) u32 {
         switch (self.pixels.len) {
             1 => {
                 for (0..6) |i| {
@@ -21,14 +21,14 @@ const VoxelInfo = struct {
                 }
 
                 for (0..4) |i| {
-                    index[i] = start + 1;
+                    index[2 + i] = start + 1;
                 }
 
                 return start + 2;
             },
             6 => {
                 for (0..6) |i| {
-                    index[i] = start + i;
+                    index[i] = start + @as(u32, @intCast(i));
                 }
 
                 return start + 6;
