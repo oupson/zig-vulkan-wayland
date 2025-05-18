@@ -14,6 +14,7 @@ const validationLayerName: [1][:0]const u8 = .{
 };
 
 const Chunk = @import("chunk.zig");
+const TextureManager = @import("texture_manager.zig");
 
 const deviceExtensions: [3]*align(1) const [:0]u8 = .{
     @ptrCast(vulkan.VK_KHR_SWAPCHAIN_EXTENSION_NAME),
@@ -29,7 +30,7 @@ const requiredExtensions: [4]*align(1) const [:0]u8 = .{
 };
 
 const MAILBOX: bool = false;
-const MAX_FRAMES_IN_FLIGHT: usize = 2;
+const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 const ZFAR = 1000.0;
 
 const Allocator = std.mem.Allocator;
@@ -94,9 +95,16 @@ const VoxelsBuffer = extern struct {
     voxels: [CHUNK_SIZE * 10 * 10 * 10]u32 = undefined,
 };
 
-const textureInfos = [_]TextureInfo{
-    .{ .pixels = @embedFile("stone.rgba"), .width = 128 * 2, .height = 128, .channels = 4 },
-    .{ .pixels = @embedFile("ugly-stone.rgba"), .width = 32, .height = 32, .channels = 4 },
+const Texture = struct {
+    image: vulkan.VkImage,
+    imageView: vulkan.VkImageView,
+    memory: vulkan.VkDeviceMemory,
+
+    fn deinit(self: *@This(), device: vulkan.VkDevice) void {
+        vulkan.vkDestroyImageView(device, self.imageView, null);
+        vulkan.vkDestroyImage(device, self.image, null);
+        vulkan.vkFreeMemory(device, self.memory, null);
+    }
 };
 
 allocator: Allocator,
@@ -128,10 +136,8 @@ uniformBuffersMemory: []vulkan.VkDeviceMemory,
 uniformBuffersMapped: [][]u8,
 descriptorPool: vulkan.VkDescriptorPool,
 descriptorSets: []vulkan.VkDescriptorSet,
-textureImages: [textureInfos.len]vulkan.VkImage,
-textureImageMemories: [textureInfos.len]vulkan.VkDeviceMemory,
-textureImageViews: [textureInfos.len]vulkan.VkImageView,
-textureSamplers: [textureInfos.len]vulkan.VkSampler,
+textures: std.MultiArrayList(Texture),
+textureSamplers: std.ArrayListUnmanaged(vulkan.VkSampler), // TODO: avoid create one sampler per texture
 depthImage: vulkan.VkImage,
 depthImageMemory: vulkan.VkDeviceMemory,
 depthImageView: vulkan.VkImageView,
@@ -150,6 +156,7 @@ pub fn new(
     surface: *wl.Surface,
     width: i32,
     height: i32,
+    textureManager: TextureManager,
 ) !Self {
     const instance = vulkanInstance.instance;
     const vulkanSurface = try createSurface(instance, display, surface);
@@ -179,7 +186,9 @@ pub fn new(
 
     const imageViewList = try getImageViewList(allocator, device, imageList, format);
 
-    const descriptorSetLayout = try createDescriptorSetLayout(device);
+    const textureCount = @as(u32, @intCast(textureManager.getTextureCount()));
+
+    const descriptorSetLayout = try createDescriptorSetLayout(device, textureCount);
 
     const renderPass = try createRenderPass(device, physicalDevice, format.format, msaaSamples);
     const pipelineLayout, const pipeline = try createGraphicPipeline(
@@ -220,25 +229,36 @@ pub fn new(
         colorImageView,
     );
 
-    var textureImages: [textureInfos.len]vulkan.VkImage = undefined;
-    var textureImageMemories: [textureInfos.len]vulkan.VkDeviceMemory = undefined;
-    var textureImageViews: [textureInfos.len]vulkan.VkImageView = undefined;
+    var textures = std.MultiArrayList(Texture).empty;
+
     // TODO: Check if multiple sampler is a good idea
-    var textureSamplers: [textureInfos.len]vulkan.VkSampler = undefined;
-    for (textureInfos, 0..) |info, i| {
-        const textureImage, const textureImageMemory, const mipLevels = try createTextureImage(
-            device,
-            physicalDevice,
-            commandPool,
-            graphicQueue,
-            info,
-        );
-        const textureImageView = try createTextureImageView(device, textureImage, mipLevels);
-        const textureSampler = try createTextureSampler(device, physicalDevice, mipLevels);
-        textureImages[i] = textureImage;
-        textureImageMemories[i] = textureImageMemory;
-        textureImageViews[i] = textureImageView;
-        textureSamplers[i] = textureSampler;
+    var textureSamplers = std.ArrayListUnmanaged(vulkan.VkSampler).empty;
+
+    {
+        var index = @as(usize, 0);
+        while (textureManager.getVoxelInfo(index)) |info| : (index += 1) {
+            for (info.pixels) |pixels| {
+                const textureImage, const textureImageMemory, const mipLevels = try createTextureImage(
+                    device,
+                    physicalDevice,
+                    commandPool,
+                    graphicQueue,
+                    pixels,
+                    info.width,
+                    info.height,
+                    info.channels,
+                );
+                const textureImageView = try createTextureImageView(device, textureImage, mipLevels);
+                const textureSampler = try createTextureSampler(device, physicalDevice, mipLevels);
+
+                try textures.append(allocator, .{
+                    .image = textureImage,
+                    .imageView = textureImageView,
+                    .memory = textureImageMemory,
+                });
+                try textureSamplers.append(allocator, textureSampler);
+            }
+        }
     }
 
     const vertex = [_]Vertex{
@@ -282,15 +302,15 @@ pub fn new(
         vulkan.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
     );
 
-    const descriptorPool = try createDescriptorPool(device);
+    const descriptorPool = try createDescriptorPool(device, textureCount);
     const descriptorSets = try createDescriptorSet(
         allocator,
         device,
         descriptorPool,
         uniformBuffers,
         descriptorSetLayout,
-        &textureImageViews,
-        &textureSamplers,
+        textures.items(.imageView),
+        textureSamplers.items,
         voxelsBuffers,
     );
 
@@ -325,9 +345,7 @@ pub fn new(
         .descriptorSetLayout = descriptorSetLayout,
         .descriptorPool = descriptorPool,
         .descriptorSets = descriptorSets,
-        .textureImages = textureImages,
-        .textureImageMemories = textureImageMemories,
-        .textureImageViews = textureImageViews,
+        .textures = textures,
         .textureSamplers = textureSamplers,
         .depthImage = depthImage,
         .depthImageMemory = depthImageMemory,
@@ -343,7 +361,7 @@ pub fn new(
 }
 
 // todo partial deinit
-pub fn deinit(self: *const Self) !void {
+pub fn deinit(self: *Self) !void {
     if (vulkan.VK_SUCCESS != vulkan.vkDeviceWaitIdle(self.device)) return error.VulkanError;
 
     vulkan.vkDestroyImageView(self.device, self.colorImageView, null);
@@ -354,13 +372,19 @@ pub fn deinit(self: *const Self) !void {
     vulkan.vkDestroyImage(self.device, self.depthImage, null);
     vulkan.vkFreeMemory(self.device, self.depthImageMemory, null);
 
-    for (0..textureInfos.len) |i| {
-        vulkan.vkDestroySampler(self.device, self.textureSamplers[i], null);
-        vulkan.vkDestroyImageView(self.device, self.textureImageViews[i], null);
-
-        vulkan.vkDestroyImage(self.device, self.textureImages[i], null);
-        vulkan.vkFreeMemory(self.device, self.textureImageMemories[i], null);
+    {
+        var s = self.textures.slice();
+        for (0..s.len) |i| {
+            var item = s.get(i);
+            item.deinit(self.device);
+        }
+        self.textures.deinit(self.allocator);
     }
+
+    for (self.textureSamplers.items) |sampler| {
+        vulkan.vkDestroySampler(self.device, sampler, null);
+    }
+    self.textureSamplers.deinit(self.allocator);
 
     vulkan.vkDestroyBuffer(self.device, self.vertexBuffer, null);
     vulkan.vkFreeMemory(self.device, self.vertexBufferMemory, null);
@@ -1461,7 +1485,7 @@ fn createIndexBuffer(
     return .{ indexBuffer, indexBufferMemory };
 }
 
-fn createDescriptorSetLayout(device: vulkan.VkDevice) !vulkan.VkDescriptorSetLayout {
+fn createDescriptorSetLayout(device: vulkan.VkDevice, textureCount: u32) !vulkan.VkDescriptorSetLayout {
     var uboLayoutBinding = vulkan.VkDescriptorSetLayoutBinding{};
     uboLayoutBinding.binding = 0;
     uboLayoutBinding.descriptorType = vulkan.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -1471,7 +1495,7 @@ fn createDescriptorSetLayout(device: vulkan.VkDevice) !vulkan.VkDescriptorSetLay
 
     var samplerLayoutBinding = vulkan.VkDescriptorSetLayoutBinding{};
     samplerLayoutBinding.binding = 1;
-    samplerLayoutBinding.descriptorCount = textureInfos.len;
+    samplerLayoutBinding.descriptorCount = textureCount;
     samplerLayoutBinding.descriptorType = vulkan.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     samplerLayoutBinding.pImmutableSamplers = null;
     samplerLayoutBinding.stageFlags = vulkan.VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -1540,13 +1564,13 @@ fn updateUniformBuffer(self: *Self, camera: *Camera) !void {
     ubo.resolution = .{ @floatFromInt(self.extent.width), @floatFromInt(self.extent.height) };
 }
 
-fn createDescriptorPool(device: vulkan.VkDevice) !vulkan.VkDescriptorPool {
+fn createDescriptorPool(device: vulkan.VkDevice, textureCount: u32) !vulkan.VkDescriptorPool {
     var poolSizes = [_]vulkan.VkDescriptorPoolSize{ .{
         .type = vulkan.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
         .descriptorCount = MAX_FRAMES_IN_FLIGHT,
     }, .{
         .type = vulkan.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .descriptorCount = MAX_FRAMES_IN_FLIGHT * textureInfos.len,
+        .descriptorCount = MAX_FRAMES_IN_FLIGHT * textureCount,
     }, .{
         .type = vulkan.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         .descriptorCount = MAX_FRAMES_IN_FLIGHT,
@@ -1595,8 +1619,9 @@ fn createDescriptorSet(
         bufferInfo.offset = 0;
         bufferInfo.range = @sizeOf(UniformBufferObject);
 
-        var imagesInfos: [textureInfos.len]vulkan.VkDescriptorImageInfo = undefined;
-        for (0..textureInfos.len) |ti| {
+        var imagesInfos = try allocator.alloc(vulkan.VkDescriptorImageInfo, textureImageViews.len);
+        defer allocator.free(imagesInfos);
+        for (0..textureImageViews.len) |ti| {
             imagesInfos[ti] = .{
                 .imageLayout = vulkan.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 .imageView = textureImageViews[ti],
@@ -1627,9 +1652,9 @@ fn createDescriptorSet(
                 .dstBinding = 1,
                 .dstArrayElement = 0,
                 .descriptorType = vulkan.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = imagesInfos.len,
+                .descriptorCount = @intCast(imagesInfos.len),
                 .pBufferInfo = null,
-                .pImageInfo = &imagesInfos, // Optional
+                .pImageInfo = imagesInfos.ptr, // Optional
                 .pTexelBufferView = null, // Optional
             },
             .{
@@ -1650,23 +1675,19 @@ fn createDescriptorSet(
     return descriptorSets;
 }
 
-const TextureInfo = struct {
-    pixels: []const u8,
-    width: u32,
-    height: u32,
-    channels: u32,
-};
-
 fn createTextureImage(
     device: vulkan.VkDevice,
     physicalDevice: vulkan.VkPhysicalDevice,
     commandPool: vulkan.VkCommandPool,
     graphicsQueue: vulkan.VkQueue,
-    info: TextureInfo,
+    pixels: []const u8,
+    width: u32,
+    height: u32,
+    channels: u32,
 ) !struct { vulkan.VkImage, vulkan.VkDeviceMemory, u32 } {
-    const mipLevels = std.math.log2(@max(info.width, info.height)) + 1;
+    const mipLevels = std.math.log2(@max(width, height)) + 1;
 
-    const bufferSize = info.width * info.height * info.channels;
+    const bufferSize = width * height * channels;
     const stagingBuffer, const stagingBufferMemory = try createBuffer(
         device,
         physicalDevice,
@@ -1684,14 +1705,14 @@ fn createTextureImage(
     if (vulkan.VK_SUCCESS != vulkan.vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, @ptrCast(&data))) {
         return error.MapMemoryFailed;
     }
-    @memcpy(data[0..bufferSize], info.pixels);
+    @memcpy(data[0..bufferSize], pixels);
     vulkan.vkUnmapMemory(device, stagingBufferMemory);
 
     const textureImage, const textureImageMemory = try createImage(
         device,
         physicalDevice,
-        info.width,
-        info.height,
+        width,
+        height,
         vulkan.VK_FORMAT_R8G8B8A8_SRGB,
         vulkan.VK_IMAGE_TILING_OPTIMAL,
         vulkan.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | vulkan.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vulkan.VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -1716,8 +1737,8 @@ fn createTextureImage(
         graphicsQueue,
         stagingBuffer,
         textureImage,
-        info.width,
-        info.height,
+        width,
+        height,
     );
 
     try generateMipmaps(
@@ -1727,8 +1748,8 @@ fn createTextureImage(
         graphicsQueue,
         textureImage,
         vulkan.VK_FORMAT_R8G8B8A8_SRGB,
-        @intCast(info.width),
-        @intCast(info.height),
+        @intCast(width),
+        @intCast(height),
         mipLevels,
     );
 

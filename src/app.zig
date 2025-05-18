@@ -11,6 +11,7 @@ const Allocator = std.mem.Allocator;
 const Renderer = @import("renderer.zig");
 const Keyboard = @import("keyboard.zig");
 const Chunk = @import("chunk.zig");
+const TextureManager = @import("texture_manager.zig");
 
 const Context = struct {
     shm: ?*wl.Shm = null,
@@ -49,6 +50,7 @@ renderer: ?Renderer = null,
 lastFrame: std.time.Instant,
 camera: Renderer.Camera = .{},
 world: [][10][10]Chunk,
+textureManager: TextureManager,
 
 const Self = @This();
 
@@ -74,12 +76,15 @@ pub fn init(allocator: Allocator) !Self {
         }
     }
 
+    const textureManager = try TextureManager.init(allocator);
+
     const self = Self{
         .allocator = allocator,
         .vulkanInstance = vulkanInstance,
         .running = true,
         .lastFrame = try std.time.Instant.now(),
         .world = world,
+        .textureManager = textureManager,
     };
 
     return self;
@@ -117,7 +122,7 @@ pub fn connect(self: *Self) !void {
 }
 
 pub fn deinit(self: *Self) void {
-    if (self.renderer) |r| {
+    if (self.renderer) |*r| {
         r.deinit() catch |e| {
             std.log.err("failed to deinit renderer: {}", .{e});
         };
@@ -156,7 +161,7 @@ const LOS = 2;
 
 pub fn dispatch(self: *Self) !void {
     if (self.recreate) {
-        if (self.renderer) |r| {
+        if (self.renderer) |*r| {
             try r.deinit();
         }
         self.renderer = try Renderer.new(
@@ -166,6 +171,7 @@ pub fn dispatch(self: *Self) !void {
             self.context.surface,
             self.width,
             self.height,
+            self.textureManager,
         );
         self.renderer.?.updateWorld(self.world);
         self.recreate = false;
