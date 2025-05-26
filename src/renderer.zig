@@ -128,6 +128,7 @@ indexBufferMemory: vulkan.VkDeviceMemory,
 commandBuffers: []vulkan.VkCommandBuffer,
 imageAvailableSemaphores: []vulkan.VkSemaphore,
 renderFinishedSemaphores: []vulkan.VkSemaphore,
+submitSemaphores: []vulkan.VkSemaphore,
 inFlightFences: []vulkan.VkFence,
 currentFrame: usize = 0,
 descriptorSetLayout: vulkan.VkDescriptorSetLayout,
@@ -184,7 +185,7 @@ pub fn new(
         height,
     );
 
-    const imageList = try getImageList(allocator, device, swapChain);
+    const imageList = try getSwapchainImages(allocator, device, swapChain);
     defer allocator.free(imageList);
 
     const imageViewList = try getImageViewList(allocator, device, imageList, format);
@@ -343,6 +344,7 @@ pub fn new(
 
     const commandBuffers = try createCommandBuffers(allocator, device, commandPool);
     const imageAvailableSemaphores, const renderFinishedSemaphores, const inFlightFences = try createSyncObjects(allocator, device);
+    const submitSemaphores = try createSubmitSemaphores(allocator, device, imageViewList.len);
     return Self{
         .allocator = allocator,
         .instance = instance,
@@ -368,6 +370,7 @@ pub fn new(
         .commandBuffers = commandBuffers,
         .imageAvailableSemaphores = imageAvailableSemaphores,
         .renderFinishedSemaphores = renderFinishedSemaphores,
+        .submitSemaphores = submitSemaphores,
         .inFlightFences = inFlightFences,
         .descriptorSetLayout = descriptorSetLayout,
         .descriptorPool = descriptorPool,
@@ -460,6 +463,11 @@ pub fn deinit(self: *Self) !void {
     }
     self.allocator.free(self.imageAvailableSemaphores);
 
+    for (self.submitSemaphores) |semaphore| {
+        vulkan.vkDestroySemaphore(self.device, semaphore, null);
+    }
+    self.allocator.free(self.submitSemaphores);
+
     self.allocator.free(self.commandBuffers);
 
     vulkan.vkDestroyCommandPool(self.device, self.commandPool, null);
@@ -518,35 +526,32 @@ pub fn draw(self: *Self, camera: *Camera) !void {
         self.indexCount,
     );
 
-    var submitInfo = vulkan.VkSubmitInfo{};
-    submitInfo.sType = vulkan.VK_STRUCTURE_TYPE_SUBMIT_INFO;
-
     const waitSemaphores = [_]vulkan.VkSemaphore{self.imageAvailableSemaphores[self.currentFrame]};
     const waitStages = [_]vulkan.VkPipelineStageFlags{vulkan.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+    const submitSemaphores = [_]vulkan.VkSemaphore{self.submitSemaphores[imageIndex]};
+
+    var submitInfo = vulkan.VkSubmitInfo{};
+    submitInfo.sType = vulkan.VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.waitSemaphoreCount = waitSemaphores.len;
     submitInfo.pWaitSemaphores = &waitSemaphores;
     submitInfo.pWaitDstStageMask = &waitStages;
-
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &self.commandBuffers[
         self.currentFrame
     ];
-
-    const signalSemaphores = [_]vulkan.VkSemaphore{self.renderFinishedSemaphores[self.currentFrame]};
-    submitInfo.signalSemaphoreCount = signalSemaphores.len;
-    submitInfo.pSignalSemaphores = &signalSemaphores;
+    submitInfo.signalSemaphoreCount = submitSemaphores.len;
+    submitInfo.pSignalSemaphores = &submitSemaphores;
 
     if (vulkan.VK_SUCCESS != vulkan.vkQueueSubmit(self.graphicQueue, 1, &submitInfo, self.inFlightFences[self.currentFrame])) {
         return error.VulkanError;
     }
 
+    const swapChains = [_]vulkan.VkSwapchainKHR{self.swapChain};
+
     var presentInfo = vulkan.VkPresentInfoKHR{};
     presentInfo.sType = vulkan.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-
-    presentInfo.waitSemaphoreCount = signalSemaphores.len;
-    presentInfo.pWaitSemaphores = &signalSemaphores;
-
-    const swapChains = [_]vulkan.VkSwapchainKHR{self.swapChain};
+    presentInfo.waitSemaphoreCount = submitSemaphores.len;
+    presentInfo.pWaitSemaphores = &submitSemaphores;
     presentInfo.swapchainCount = swapChains.len;
     presentInfo.pSwapchains = &swapChains;
     presentInfo.pImageIndices = &imageIndex;
@@ -916,7 +921,7 @@ fn chooseSwapExtent(capabilities: *const vulkan.VkSurfaceCapabilitiesKHR, width:
     }
 }
 
-fn getImageList(allocator: Allocator, device: vulkan.VkDevice, swapChain: vulkan.VkSwapchainKHR) ![]vulkan.VkImage {
+fn getSwapchainImages(allocator: Allocator, device: vulkan.VkDevice, swapChain: vulkan.VkSwapchainKHR) ![]vulkan.VkImage {
     var imageCount: u32 = 0;
     if (vulkan.VK_SUCCESS != vulkan.vkGetSwapchainImagesKHR(device, swapChain, &imageCount, null)) return error.VulkanFailed;
     const swapChainImages = try allocator.alloc(vulkan.VkImage, imageCount);
@@ -1354,6 +1359,19 @@ fn createSyncObjects(allocator: Allocator, device: vulkan.VkDevice) !struct { []
     }
 
     return .{ imageAvailableSemaphores, renderFinishedSemaphores, inFlightFences };
+}
+
+fn createSubmitSemaphores(allocator: Allocator, device: vulkan.VkDevice, swapChainCount: usize) ![]vulkan.VkSemaphore {
+    var semaphoreInfo = vulkan.VkSemaphoreCreateInfo{
+        .sType = vulkan.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+    };
+    var semaphores = try allocator.alloc(vulkan.VkSemaphore, swapChainCount);
+    for (0..swapChainCount) |i| {
+        if (vulkan.vkCreateSemaphore(device, &semaphoreInfo, null, &semaphores[i]) != vulkan.VK_SUCCESS) {
+            return error.VulkanError;
+        }
+    }
+    return semaphores;
 }
 
 pub fn createVertexBuffer(
