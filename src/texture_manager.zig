@@ -42,21 +42,21 @@ const VoxelInfo = struct {
 
 const voxelsInfos = [_]VoxelInfo{
     .{
-        .pixels = &[_][]const u8{@embedFile("stone.rgba")},
+        .pixels = &[_][]const u8{@embedFile("textures/stone.rgba")},
         .width = 32,
         .height = 32,
         .channels = 4,
     },
     .{
-        .pixels = &[_][]const u8{@embedFile("ugly-stone.rgba")},
+        .pixels = &[_][]const u8{@embedFile("textures/cobblestone.rgba")},
         .width = 32,
         .height = 32,
         .channels = 4,
     },
     .{
         .pixels = &[_][]const u8{
-            @embedFile("ugly-wood-top.rgba"),
-            @embedFile("ugly-wood.rgba"),
+            @embedFile("textures/log-top.rgba"),
+            @embedFile("textures/log-side.rgba"),
         },
         .width = 32,
         .height = 32,
