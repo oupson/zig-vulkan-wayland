@@ -43,8 +43,8 @@ const VoxelInfo = struct {
 const voxelsInfos = [_]VoxelInfo{
     .{
         .pixels = &[_][]const u8{@embedFile("stone.rgba")},
-        .width = 128 * 2,
-        .height = 128,
+        .width = 32,
+        .height = 32,
         .channels = 4,
     },
     .{
