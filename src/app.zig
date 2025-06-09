@@ -59,21 +59,18 @@ pub fn init(allocator: Allocator) !Self {
 
     const world = try allocator.alloc([10][10]Chunk, 10);
 
-    for (0..10) |zchunk| {
-        for (0..10) |xchunk| {
-            for (0..10) |ychunk| {
-                var c = &world[zchunk][ychunk][xchunk];
-                for (0..c.elements.len) |i| {
-                    c.elements[i] = 0;
-                }
+    for (world) |*zchunk| {
+        for (zchunk) |*ychunk| {
+            for (ychunk) |*c| {
+                c.* = Chunk.init(allocator);
 
-                for (0..32) |x| {
-                    for (0..32) |z| {
-                        c.putBlock(x, 0, z, if (std.crypto.random.boolean()) 1 else 2);
+                for (0..64) |x| {
+                    for (0..64) |z| {
+                        try c.putBlock(x, 0, z, if (std.crypto.random.boolean()) 1 else 2);
                     }
                 }
 
-                c.putBlock(1, 2, 1, 3);
+                try c.putBlock(1, 2, 1, 3);
             }
         }
     }

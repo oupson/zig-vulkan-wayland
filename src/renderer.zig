@@ -15,6 +15,7 @@ const validationLayerName: [1][:0]const u8 = .{
 
 const Chunk = @import("chunk.zig");
 const TextureManager = @import("texture_manager.zig");
+const BrickMap = @import("brickmap.zig");
 
 const deviceExtensions: [3]*align(1) const [:0]u8 = .{
     @ptrCast(vulkan.VK_KHR_SWAPCHAIN_EXTENSION_NAME),
@@ -83,7 +84,8 @@ const Vertex = struct {
     }
 };
 
-const CHUNK_SIZE = 32 * 32 * 32;
+const ROW_LENGTH = 64;
+const CHUNK_SIZE = ROW_LENGTH * ROW_LENGTH * ROW_LENGTH;
 
 const UniformBufferObject = extern struct {
     camera_pos: @Vector(4, f32) align(4),
@@ -2384,11 +2386,20 @@ pub fn updateWorld(self: *Self, world: [][10][10]Chunk) void {
     for (0..MAX_FRAMES_IN_FLIGHT) |f| {
         const vox: *VoxelsBuffer = @alignCast(@ptrCast(self.voxelsBuffersMapped[f]));
 
-        for (0..10) |z| {
-            for (0..10) |y| {
-                for (0..10) |x| {
-                    const chunk = &world[z][y][x];
-                    @memcpy(vox.voxels[(z * 10 * 10 + y * 10 + x) * CHUNK_SIZE ..][0..CHUNK_SIZE], chunk.elements[0..CHUNK_SIZE]);
+        for (0..10) |zchunk| {
+            for (0..10) |ychunk| {
+                for (0..10) |xchunk| {
+                    const chunk = &world[zchunk][ychunk][xchunk];
+                    const chunk_slice = vox.voxels[(zchunk * 10 * 10 + ychunk * 10 + xchunk) * CHUNK_SIZE ..][0..CHUNK_SIZE];
+
+                    for (0..64) |z| {
+                        for (0..64) |y| {
+                            for (0..64) |x| {
+                                const block = chunk.getBlock(x, y, z);
+                                chunk_slice[z * ROW_LENGTH * ROW_LENGTH + y * ROW_LENGTH + x] = @as(u32, block);
+                            }
+                        }
+                    }
                 }
             }
         }

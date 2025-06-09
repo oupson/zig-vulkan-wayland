@@ -13,7 +13,7 @@ layout(binding = 0) uniform UniformBufferObject {
 layout(binding = 1) uniform sampler2D texSampler[];
 
 layout(std430, binding = 2) readonly buffer VoxelsBuffer {
-    uint voxels[32 * 32 * 32 * 10 * 10 * 10];
+    uint voxels[64 * 64 * 64 * 10 * 10 * 10];
 } voxels;
 
 layout(std430, binding = 3) readonly buffer TextureInfos {
@@ -40,20 +40,19 @@ bvec3 isEqual(vec3 a, vec3 b) {
 }
 
 uint get_voxel(ivec3 pos) {
-    ivec3 real_pos = pos + 5 * 32;
-
-    ivec3 chunk_pos = real_pos / 32;
-    ivec3 inpos = real_pos - (chunk_pos * 32);
-
-    int chunk_index = chunk_pos.z * 10 * 10 + chunk_pos.y * 10 + chunk_pos.x;
-    int chunk_in_index =
-        inpos.z * 32 * 32 + inpos.y * 32 + inpos.x;
-
-    // TODO: Proper bound check
-    if (!all(greaterThanEqual(real_pos, ivec3(0)))) {
+    bool isOut = any(lessThanEqual(pos, ivec3(0))) ||
+            any(greaterThanEqual(pos, ivec3(10 * 64)));
+    if (isOut) {
         return 0;
     } else {
-        return voxels.voxels[(chunk_index * 32 * 32 * 32) + chunk_in_index];
+        ivec3 chunk_pos = pos / 64;
+        ivec3 inpos = pos - (chunk_pos * 64);
+
+        int chunk_index = chunk_pos.z * 10 * 10 + chunk_pos.y * 10 + chunk_pos.x;
+        int chunk_in_index =
+            inpos.z * 64 * 64 + inpos.y * 64 + inpos.x;
+
+        return voxels.voxels[(chunk_index * 64 * 64 * 64) + chunk_in_index];
     }
 }
 
@@ -86,8 +85,6 @@ vec3 raytrace(vec3 ray_pos, vec3 ray_dir) {
         if (i == MAX_RAY_STEPS) {
             return vec3(0, 0, 0);
         }
-
-        color *= dot(vec3(0.5, 1.0, 0.75), vec3(mask));
     }
 
     float d = length(vec3(mask) * (side_dist - delta_dist));
@@ -99,7 +96,7 @@ vec3 raytrace(vec3 ray_pos, vec3 ray_dir) {
     vec3 normals = vec3(isEqual(voxel_pos, dst)) * -1.0
             + vec3(isEqual(voxel_pos + 1.0, dst));
 
-    dst = dst - vec3(map_pos);
+    dst = dst - voxel_pos;
     bvec3 faces = notEqual(normals, vec3(0.0));
     vec2 facePosition;
     int faceTextureIndex;
@@ -156,6 +153,8 @@ void main() {
 
     rd.y *= -1;
     ro.y *= -1;
+
+    ro += 5 * 64;
 
     outColor = vec4(raytrace(ro, rd), 1.0);
 }
