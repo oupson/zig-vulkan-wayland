@@ -65,6 +65,11 @@ pub fn main() !void {
     defer arena.free(debug_input_path);
     @memcpy(debug_input_path, input_file_path);
 
+    const options = shaderc.shaderc_compile_options_initialize();
+    defer shaderc.shaderc_compile_options_release(options);
+
+    shaderc.shaderc_compile_options_set_optimization_level(options, shaderc.shaderc_optimization_level_performance);
+
     const result = shaderc.shaderc_compile_into_spv(
         compiler,
         input_buffer.ptr,
@@ -72,7 +77,7 @@ pub fn main() !void {
         shader_type.toShaderc(),
         debug_input_path,
         "main",
-        null,
+        options,
     );
     defer shaderc.shaderc_result_release(result);
 
