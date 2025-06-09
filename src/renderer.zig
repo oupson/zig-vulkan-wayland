@@ -2116,8 +2116,8 @@ fn createTextureSampler(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysic
 
     var samplerInfo = vulkan.VkSamplerCreateInfo{};
     samplerInfo.sType = vulkan.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = vulkan.VK_FILTER_LINEAR;
-    samplerInfo.minFilter = vulkan.VK_FILTER_LINEAR;
+    samplerInfo.magFilter = vulkan.VK_FILTER_NEAREST;
+    samplerInfo.minFilter = vulkan.VK_FILTER_NEAREST;
     samplerInfo.addressModeU = vulkan.VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.addressModeV = vulkan.VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.addressModeW = vulkan.VK_SAMPLER_ADDRESS_MODE_REPEAT;
@@ -2127,7 +2127,7 @@ fn createTextureSampler(device: vulkan.VkDevice, physicalDevice: vulkan.VkPhysic
     samplerInfo.unnormalizedCoordinates = vulkan.VK_FALSE;
     samplerInfo.compareEnable = vulkan.VK_FALSE;
     samplerInfo.compareOp = vulkan.VK_COMPARE_OP_ALWAYS;
-    samplerInfo.mipmapMode = vulkan.VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.mipmapMode = vulkan.VK_SAMPLER_MIPMAP_MODE_NEAREST;
     samplerInfo.mipLodBias = 0.0;
     samplerInfo.minLod = 0.0;
     samplerInfo.maxLod = @floatFromInt(mipLevels);
