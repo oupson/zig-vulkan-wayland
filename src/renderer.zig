@@ -501,14 +501,21 @@ pub fn draw(self: *Self, camera: *Camera) !void {
     if (vulkan.VK_SUCCESS != vulkan.vkWaitForFences(self.device, 1, &self.inFlightFences[self.currentFrame], vulkan.VK_TRUE, std.math.maxInt(u64))) return error.VulkanError;
     var imageIndex: u32 = 0;
 
-    if (vulkan.VK_SUCCESS != vulkan.vkAcquireNextImageKHR(
+    const resCode = vulkan.vkAcquireNextImageKHR(
         self.device,
         self.swapChain,
         std.math.maxInt(u64),
         self.imageAvailableSemaphores[self.currentFrame],
         null,
         &imageIndex,
-    )) return error.VulkanError;
+    );
+
+    // TODO: proper error handling
+    if (resCode == vulkan.VK_SUBOPTIMAL_KHR or resCode == vulkan.VK_ERROR_OUT_OF_DATE_KHR) {
+        return error.RecreateSwapchain;
+    } else if (resCode < 0) {
+        return error.VulkanError;
+    }
 
     try self.updateUniformBuffer(camera);
 

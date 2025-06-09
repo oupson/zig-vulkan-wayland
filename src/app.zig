@@ -195,7 +195,14 @@ pub fn dispatch(self: *Self) !void {
     camera.y += @as(f32, @floatFromInt(keyboard_state.up)) * deltaTime;
     camera.z += @as(f32, z) * deltaTime;
 
-    try self.renderer.?.draw(&self.camera);
+    self.renderer.?.draw(&self.camera) catch |e| {
+        if (e == error.RecreateSwapchain) {
+            std.log.err("recreating swapchain", .{});
+            self.recreate = true;
+        } else {
+            return e;
+        }
+    };
 
     if (self.context.display.dispatch() != .SUCCESS) return error.DispatchFailed;
 }
@@ -236,11 +243,10 @@ fn wmBaseListener(wm_base: *xdg.WmBase, event: xdg.WmBase.Event, _: ?*anyopaque)
 }
 
 fn xdgSurfaceListener(xdg_surface: *xdg.Surface, event: xdg.Surface.Event, surface: *wl.Surface) void {
+    _ = surface;
     switch (event) {
         .configure => |configure| {
             xdg_surface.ackConfigure(configure.serial);
-            surface.commit();
-
             std.log.info("configure", .{});
         },
     }
