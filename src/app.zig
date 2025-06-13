@@ -157,6 +157,15 @@ pub fn deinit(self: *Self) void {
     self.context.surface.destroy();
     self.context.registry.destroy();
     self.context.display.disconnect();
+
+    for (0..10) |cz| {
+        for (0..10) |cy| {
+            for (0..10) |cx| {
+                self.world[cz][cy][cx].deinit();
+            }
+        }
+    }
+
     self.allocator.free(self.world);
 }
 
