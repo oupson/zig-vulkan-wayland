@@ -109,19 +109,150 @@ const Texture = struct {
     }
 };
 
+const Swapchain = struct {
+    device: vulkan.VkDevice,
+    allocator: Allocator,
+    swapChain: vulkan.VkSwapchainKHR,
+    extent: vulkan.VkExtent2D,
+    imageViewList: []vulkan.VkImageView,
+    renderPass: vulkan.VkRenderPass,
+    pipelineLayout: vulkan.VkPipelineLayout,
+    pipeline: vulkan.VkPipeline,
+    swapChainFramebuffers: []vulkan.VkFramebuffer,
+    submitSemaphores: []vulkan.VkSemaphore,
+    depthImage: vulkan.VkImage, // TODO: remove ?
+    depthImageMemory: vulkan.VkDeviceMemory,
+    depthImageView: vulkan.VkImageView,
+    colorImage: vulkan.VkImage,
+    colorImageMemory: vulkan.VkDeviceMemory,
+    colorImageView: vulkan.VkImageView,
+
+    pub fn create(
+        allocator: Allocator,
+        device: vulkan.VkDevice,
+        physicalDevice: vulkan.VkPhysicalDevice,
+        msaaSamples: c_uint,
+        surface: vulkan.VkSurfaceKHR,
+        descriptorSetLayout: vulkan.VkDescriptorSetLayout,
+        commandPool: vulkan.VkCommandPool,
+        graphicQueue: vulkan.VkQueue,
+        width: i32,
+        height: i32,
+    ) !@This() {
+        const swapChain, const format, const extent = try createSwapChain(
+            allocator,
+            device,
+            physicalDevice,
+            surface,
+            width,
+            height,
+        );
+
+        const imageList = try getSwapchainImages(allocator, device, swapChain);
+        defer allocator.free(imageList);
+
+        const imageViewList = try getImageViewList(allocator, device, imageList, format);
+
+        const renderPass = try createRenderPass(device, physicalDevice, format.format, msaaSamples);
+        const pipelineLayout, const pipeline = try createGraphicPipeline(
+            allocator,
+            device,
+            extent,
+            renderPass,
+            descriptorSetLayout,
+            msaaSamples,
+        );
+
+        const colorImage, const colorImageMemory, const colorImageView = try createColorResources(
+            device,
+            physicalDevice,
+            extent,
+            format.format,
+            msaaSamples,
+        );
+
+        const depthImage, const depthImageMemory, const depthImageView = try createDepthResources(
+            device,
+            physicalDevice,
+            commandPool,
+            graphicQueue,
+            extent,
+            msaaSamples,
+        );
+
+        const swapChainFramebuffers = try createFramebuffers(
+            allocator,
+            device,
+            imageViewList,
+            renderPass,
+            extent,
+            depthImageView,
+            colorImageView,
+        );
+
+        const submitSemaphores = try createSubmitSemaphores(allocator, device, imageViewList.len);
+
+        return @This(){
+            .device = device,
+            .allocator = allocator,
+            .swapChain = swapChain,
+            .extent = extent,
+            .imageViewList = imageViewList,
+            .renderPass = renderPass,
+            .pipelineLayout = pipelineLayout,
+            .pipeline = pipeline,
+            .swapChainFramebuffers = swapChainFramebuffers,
+            .submitSemaphores = submitSemaphores,
+            .depthImage = depthImage,
+            .depthImageMemory = depthImageMemory,
+            .depthImageView = depthImageView,
+            .colorImage = colorImage,
+            .colorImageMemory = colorImageMemory,
+            .colorImageView = colorImageView,
+        };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        vulkan.vkDestroyImageView(self.device, self.colorImageView, null);
+        vulkan.vkDestroyImage(self.device, self.colorImage, null);
+        vulkan.vkFreeMemory(self.device, self.colorImageMemory, null);
+
+        vulkan.vkDestroyImageView(self.device, self.depthImageView, null);
+        vulkan.vkDestroyImage(self.device, self.depthImage, null);
+        vulkan.vkFreeMemory(self.device, self.depthImageMemory, null);
+
+        for (self.submitSemaphores) |semaphore| {
+            vulkan.vkDestroySemaphore(self.device, semaphore, null);
+        }
+        self.allocator.free(self.submitSemaphores);
+
+        for (self.swapChainFramebuffers) |framebuffer| {
+            vulkan.vkDestroyFramebuffer(self.device, framebuffer, null);
+        }
+        self.allocator.free(self.swapChainFramebuffers);
+
+        vulkan.vkDestroyPipeline(self.device, self.pipeline, null);
+        vulkan.vkDestroyPipelineLayout(self.device, self.pipelineLayout, null);
+        vulkan.vkDestroyRenderPass(self.device, self.renderPass, null);
+
+        for (self.imageViewList) |imageView| {
+            vulkan.vkDestroyImageView(self.device, imageView, null);
+        }
+        self.allocator.free(self.imageViewList);
+
+        vulkan.vkDestroySwapchainKHR(self.device, self.swapChain, null);
+    }
+};
+
 allocator: Allocator,
 instance: vulkan.VkInstance,
 vulkanSurface: vulkan.VkSurfaceKHR,
 device: vulkan.VkDevice,
+physicalDevice: vulkan.VkPhysicalDevice,
+msaaSamples: c_uint,
 graphicQueue: vulkan.VkQueue,
 presentQueue: vulkan.VkQueue,
-swapChain: vulkan.VkSwapchainKHR,
-extent: vulkan.VkExtent2D,
-imageViewList: []vulkan.VkImageView,
-renderPass: vulkan.VkRenderPass,
-pipelineLayout: vulkan.VkPipelineLayout,
-pipeline: vulkan.VkPipeline,
-swapChainFramebuffers: []vulkan.VkFramebuffer,
+swapChain: ?Swapchain,
 commandPool: vulkan.VkCommandPool,
 vertexBuffer: vulkan.VkBuffer,
 vertexBufferMemory: vulkan.VkDeviceMemory,
@@ -130,7 +261,6 @@ indexBufferMemory: vulkan.VkDeviceMemory,
 commandBuffers: []vulkan.VkCommandBuffer,
 imageAvailableSemaphores: []vulkan.VkSemaphore,
 renderFinishedSemaphores: []vulkan.VkSemaphore,
-submitSemaphores: []vulkan.VkSemaphore,
 inFlightFences: []vulkan.VkFence,
 currentFrame: usize = 0,
 descriptorSetLayout: vulkan.VkDescriptorSetLayout,
@@ -141,12 +271,6 @@ descriptorPool: vulkan.VkDescriptorPool,
 descriptorSets: []vulkan.VkDescriptorSet,
 textures: std.MultiArrayList(Texture),
 textureSamplers: std.ArrayListUnmanaged(vulkan.VkSampler), // TODO: avoid create one sampler per texture
-depthImage: vulkan.VkImage,
-depthImageMemory: vulkan.VkDeviceMemory,
-depthImageView: vulkan.VkImageView,
-colorImage: vulkan.VkImage,
-colorImageMemory: vulkan.VkDeviceMemory,
-colorImageView: vulkan.VkImageView,
 indexCount: u32,
 voxelsBuffers: []vulkan.VkBuffer,
 voxelsBuffersMemory: []vulkan.VkDeviceMemory,
@@ -160,8 +284,6 @@ pub fn new(
     allocator: Allocator,
     display: *wl.Display,
     surface: *wl.Surface,
-    width: i32,
-    height: i32,
     textureManager: TextureManager,
 ) !Self {
     const instance = vulkanInstance.instance;
@@ -178,62 +300,9 @@ pub fn new(
     var presentQueue: vulkan.VkQueue = null;
     vulkan.vkGetDeviceQueue(device, familyIndice.present.?, 0, &presentQueue);
 
-    const swapChain, const format, const extent = try createSwapChain(
-        allocator,
-        device,
-        physicalDevice,
-        vulkanSurface,
-        width,
-        height,
-    );
-
-    const imageList = try getSwapchainImages(allocator, device, swapChain);
-    defer allocator.free(imageList);
-
-    const imageViewList = try getImageViewList(allocator, device, imageList, format);
-
     const textureCount = @as(u32, @intCast(textureManager.getTextureCount()));
 
-    const descriptorSetLayout = try createDescriptorSetLayout(device, textureCount);
-
-    const renderPass = try createRenderPass(device, physicalDevice, format.format, msaaSamples);
-    const pipelineLayout, const pipeline = try createGraphicPipeline(
-        allocator,
-        device,
-        extent,
-        renderPass,
-        descriptorSetLayout,
-        msaaSamples,
-    );
-
     const commandPool = try createCommandPool(allocator, physicalDevice, device, vulkanSurface);
-
-    const colorImage, const colorImageMemory, const colorImageView = try createColorResources(
-        device,
-        physicalDevice,
-        extent,
-        format.format,
-        msaaSamples,
-    );
-
-    const depthImage, const depthImageMemory, const depthImageView = try createDepthResources(
-        device,
-        physicalDevice,
-        commandPool,
-        graphicQueue,
-        extent,
-        msaaSamples,
-    );
-
-    const swapChainFramebuffers = try createFramebuffers(
-        allocator,
-        device,
-        imageViewList,
-        renderPass,
-        extent,
-        depthImageView,
-        colorImageView,
-    );
 
     var textures = std.MultiArrayList(Texture).empty;
 
@@ -330,6 +399,8 @@ pub fn new(
         vulkan.vkUnmapMemory(device, textureInfoBuffersMemory[i]);
     }
 
+    const descriptorSetLayout = try createDescriptorSetLayout(device, textureCount);
+
     const descriptorPool = try createDescriptorPool(device, textureCount);
     const descriptorSets = try createDescriptorSet(
         allocator,
@@ -346,21 +417,16 @@ pub fn new(
 
     const commandBuffers = try createCommandBuffers(allocator, device, commandPool);
     const imageAvailableSemaphores, const renderFinishedSemaphores, const inFlightFences = try createSyncObjects(allocator, device);
-    const submitSemaphores = try createSubmitSemaphores(allocator, device, imageViewList.len);
     return Self{
         .allocator = allocator,
         .instance = instance,
         .vulkanSurface = vulkanSurface,
         .device = device,
+        .physicalDevice = physicalDevice,
+        .msaaSamples = msaaSamples,
         .graphicQueue = graphicQueue,
         .presentQueue = presentQueue,
-        .swapChain = swapChain,
-        .extent = extent,
-        .imageViewList = imageViewList,
-        .renderPass = renderPass,
-        .pipelineLayout = pipelineLayout,
-        .pipeline = pipeline,
-        .swapChainFramebuffers = swapChainFramebuffers,
+        .swapChain = null,
         .commandPool = commandPool,
         .vertexBuffer = vertexBuffer,
         .vertexBufferMemory = vertexBufferMemory,
@@ -372,19 +438,12 @@ pub fn new(
         .commandBuffers = commandBuffers,
         .imageAvailableSemaphores = imageAvailableSemaphores,
         .renderFinishedSemaphores = renderFinishedSemaphores,
-        .submitSemaphores = submitSemaphores,
         .inFlightFences = inFlightFences,
         .descriptorSetLayout = descriptorSetLayout,
         .descriptorPool = descriptorPool,
         .descriptorSets = descriptorSets,
         .textures = textures,
         .textureSamplers = textureSamplers,
-        .depthImage = depthImage,
-        .depthImageMemory = depthImageMemory,
-        .depthImageView = depthImageView,
-        .colorImage = colorImage,
-        .colorImageMemory = colorImageMemory,
-        .colorImageView = colorImageView,
         .indexCount = @intCast(index.len), // TODO : remove
         .voxelsBuffers = voxelsBuffers,
         .voxelsBuffersMapped = voxelsBuffersMapped,
@@ -395,17 +454,12 @@ pub fn new(
     };
 }
 
-// todo partial deinit
 pub fn deinit(self: *Self) !void {
     if (vulkan.VK_SUCCESS != vulkan.vkDeviceWaitIdle(self.device)) return error.VulkanError;
 
-    vulkan.vkDestroyImageView(self.device, self.colorImageView, null);
-    vulkan.vkDestroyImage(self.device, self.colorImage, null);
-    vulkan.vkFreeMemory(self.device, self.colorImageMemory, null);
-
-    vulkan.vkDestroyImageView(self.device, self.depthImageView, null);
-    vulkan.vkDestroyImage(self.device, self.depthImage, null);
-    vulkan.vkFreeMemory(self.device, self.depthImageMemory, null);
+    if (self.swapChain) |*swapchain| {
+        swapchain.deinit();
+    }
 
     {
         var s = self.textures.slice();
@@ -465,45 +519,43 @@ pub fn deinit(self: *Self) !void {
     }
     self.allocator.free(self.imageAvailableSemaphores);
 
-    for (self.submitSemaphores) |semaphore| {
-        vulkan.vkDestroySemaphore(self.device, semaphore, null);
-    }
-    self.allocator.free(self.submitSemaphores);
-
     self.allocator.free(self.commandBuffers);
 
     vulkan.vkDestroyCommandPool(self.device, self.commandPool, null);
-
-    for (self.swapChainFramebuffers) |framebuffer| {
-        vulkan.vkDestroyFramebuffer(self.device, framebuffer, null);
-    }
-    self.allocator.free(self.swapChainFramebuffers);
-
-    vulkan.vkDestroyPipeline(self.device, self.pipeline, null);
-    vulkan.vkDestroyPipelineLayout(self.device, self.pipelineLayout, null);
-    vulkan.vkDestroyRenderPass(self.device, self.renderPass, null);
-
-    for (self.imageViewList) |imageView| {
-        vulkan.vkDestroyImageView(self.device, imageView, null);
-    }
-    self.allocator.free(self.imageViewList);
-
-    // imageList
-
-    vulkan.vkDestroySwapchainKHR(self.device, self.swapChain, null);
 
     vulkan.vkDestroyDevice(self.device, null);
 
     vulkan.vkDestroySurfaceKHR(self.instance, self.vulkanSurface, null);
 }
 
+pub fn recreate(self: *Self, width: i32, height: i32) !void {
+    if (self.swapChain) |*swapchain| {
+        swapchain.deinit();
+    }
+
+    self.swapChain = try Swapchain.create(
+        self.allocator,
+        self.device,
+        self.physicalDevice,
+        self.msaaSamples,
+        self.vulkanSurface,
+        self.descriptorSetLayout,
+        self.commandPool,
+        self.graphicQueue,
+        width,
+        height,
+    );
+}
+
 pub fn draw(self: *Self, camera: *Camera) !void {
+    const swapchain = self.swapChain orelse return error.MissingSwapchain;
+
     if (vulkan.VK_SUCCESS != vulkan.vkWaitForFences(self.device, 1, &self.inFlightFences[self.currentFrame], vulkan.VK_TRUE, std.math.maxInt(u64))) return error.VulkanError;
     var imageIndex: u32 = 0;
 
     const resCode = vulkan.vkAcquireNextImageKHR(
         self.device,
-        self.swapChain,
+        swapchain.swapChain,
         std.math.maxInt(u64),
         self.imageAvailableSemaphores[self.currentFrame],
         null,
@@ -511,33 +563,33 @@ pub fn draw(self: *Self, camera: *Camera) !void {
     );
 
     // TODO: proper error handling
-    if (resCode == vulkan.VK_SUBOPTIMAL_KHR or resCode == vulkan.VK_ERROR_OUT_OF_DATE_KHR) {
+    if ((resCode == vulkan.VK_SUBOPTIMAL_KHR and false) or resCode == vulkan.VK_ERROR_OUT_OF_DATE_KHR) {
         return error.RecreateSwapchain;
     } else if (resCode < 0) {
         return error.VulkanError;
     }
 
-    try self.updateUniformBuffer(camera);
+    try self.updateUniformBuffer(camera, &swapchain);
 
     if (vulkan.VK_SUCCESS != vulkan.vkResetFences(self.device, 1, &self.inFlightFences[self.currentFrame])) return error.VulkanError;
 
     if (vulkan.VK_SUCCESS != vulkan.vkResetCommandBuffer(self.commandBuffers[self.currentFrame], 0)) return error.VulkanError;
     try recordCommandBuffer(
         self.commandBuffers[self.currentFrame],
-        self.renderPass,
-        self.extent,
-        self.swapChainFramebuffers[imageIndex],
-        self.pipeline,
+        swapchain.renderPass,
+        swapchain.extent,
+        swapchain.swapChainFramebuffers[imageIndex],
+        swapchain.pipeline,
         self.vertexBuffer,
         self.indexBuffer,
-        self.pipelineLayout,
+        swapchain.pipelineLayout,
         &self.descriptorSets[self.currentFrame],
         self.indexCount,
     );
 
     const waitSemaphores = [_]vulkan.VkSemaphore{self.imageAvailableSemaphores[self.currentFrame]};
     const waitStages = [_]vulkan.VkPipelineStageFlags{vulkan.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-    const submitSemaphores = [_]vulkan.VkSemaphore{self.submitSemaphores[imageIndex]};
+    const submitSemaphores = [_]vulkan.VkSemaphore{swapchain.submitSemaphores[imageIndex]};
 
     var submitInfo = vulkan.VkSubmitInfo{};
     submitInfo.sType = vulkan.VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -555,7 +607,7 @@ pub fn draw(self: *Self, camera: *Camera) !void {
         return error.VulkanError;
     }
 
-    const swapChains = [_]vulkan.VkSwapchainKHR{self.swapChain};
+    const swapChains = [_]vulkan.VkSwapchainKHR{swapchain.swapChain};
 
     var presentInfo = vulkan.VkPresentInfoKHR{};
     presentInfo.sType = vulkan.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -1635,13 +1687,13 @@ fn createUniformBuffersWithSize(bufferSize: usize, allocator: Allocator, device:
     return .{ uniformBuffers, uniformBuffersMemory, uniformBuffersMapped };
 }
 
-fn updateUniformBuffer(self: *Self, camera: *Camera) !void {
+fn updateUniformBuffer(self: *Self, camera: *Camera, swapchain: *const Swapchain) !void {
     const ubo: *UniformBufferObject = @alignCast(@ptrCast(self.uniformBuffersMapped[self.currentFrame]));
 
     // TODO: init resolution at creation time
     ubo.camera_pos = .{ camera.x, -camera.y, camera.z, std.math.degreesToRadians(45) };
     ubo.camera_rot = .{ std.math.degreesToRadians(camera.yaw), std.math.degreesToRadians(camera.pitch) };
-    ubo.resolution = .{ @floatFromInt(self.extent.width), @floatFromInt(self.extent.height) };
+    ubo.resolution = .{ @floatFromInt(swapchain.extent.width), @floatFromInt(swapchain.extent.height) };
 }
 
 fn createDescriptorPool(device: vulkan.VkDevice, textureCount: u32) !vulkan.VkDescriptorPool {

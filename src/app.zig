@@ -118,6 +118,10 @@ pub fn connect(self: *Self) !void {
     self.context.surface.commit();
 
     if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
+
+    const renderer = try Renderer.new(self.vulkanInstance, self.allocator, display, self.context.surface, self.textureManager);
+    self.renderer = renderer;
+    self.renderer.?.updateWorld(self.world);
 }
 
 pub fn deinit(self: *Self) void {
@@ -160,19 +164,7 @@ const LOS = 2;
 
 pub fn dispatch(self: *Self) !void {
     if (self.recreate) {
-        if (self.renderer) |*r| {
-            try r.deinit();
-        }
-        self.renderer = try Renderer.new(
-            self.vulkanInstance,
-            self.allocator,
-            self.context.display,
-            self.context.surface,
-            self.width,
-            self.height,
-            self.textureManager,
-        );
-        self.renderer.?.updateWorld(self.world);
+        try self.renderer.?.recreate(self.width, self.height);
         self.recreate = false;
     }
 
