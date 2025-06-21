@@ -7,11 +7,23 @@ const wl = wayland.client.wl;
 const xdg = wayland.client.xdg;
 const zxdg = wayland.client.zxdg;
 const zwp = wayland.client.zwp;
+
 const Allocator = std.mem.Allocator;
 const Renderer = @import("renderer.zig");
 const Keyboard = @import("keyboard.zig");
 const Chunk = @import("chunk.zig");
 const TextureManager = @import("texture_manager.zig");
+
+// fn createSurface(instance: vulkan.VkInstance, display: *wl.Display, surface: *wl.Surface) !vulkan.VkSurfaceKHR {
+//     var createInfo = vulkan.VkWaylandSurfaceCreateInfoKHR{};
+//     createInfo.sType = vulkan.VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
+//     createInfo.display = @ptrCast(display);
+//     createInfo.surface = @ptrCast(surface);
+
+//     var vulkanSurface: vulkan.VkSurfaceKHR = null;
+//     if (vulkan.VK_SUCCESS != vulkan.vkCreateWaylandSurfaceKHR(instance, &createInfo, null, &vulkanSurface)) return error.FailedToCreateVulkanSurface;
+//     return vulkanSurface;
+// }
 
 const Context = struct {
     shm: ?*wl.Shm = null,

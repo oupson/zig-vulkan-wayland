@@ -1,12 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const wayland = @import("wayland");
-const wl = wayland.client.wl;
-
 const Allocator = std.mem.Allocator;
 
-const App = @import("app.zig");
+const App = switch (builtin.target.os.tag) {
+    .linux => @import("app.zig"),
+    .windows => @import("windows.zig"),
+    else => @panic("unimplented"),
+};
 const Renderer = @import("renderer.zig");
 
 var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
