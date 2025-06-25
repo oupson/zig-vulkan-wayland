@@ -25,6 +25,38 @@ const Leaf = union(LeafType) {
             },
         }
     }
+
+    fn compact(self: *@This(), allocator: Allocator) void {
+        const leaves = self.*.leaves;
+        var are_same = true;
+        var value: ?u16 = null;
+
+        for (leaves) |*l| {
+            if (l.* == .leaves) {
+                l.compact(allocator);
+            }
+
+            switch (l.*) {
+                .full => |b| {
+                    if (are_same) {
+                        if (value == null) {
+                            value = b;
+                        } else if (value != b) {
+                            are_same = false;
+                        }
+                    }
+                },
+                .leaves => {
+                    are_same = false;
+                },
+            }
+        }
+
+        if (are_same) {
+            allocator.free(leaves);
+            self.* = .{ .full = value.? };
+        }
+    }
 };
 
 pub fn init(allocator: Allocator) Self {
@@ -66,7 +98,6 @@ pub fn getBlock(self: *const Self, x: usize, y: usize, z: usize) u16 {
     return leaf.full;
 }
 
-// TODO: merge leaf
 pub fn putBlock(self: *Self, x: usize, y: usize, z: usize, block: u16) !void {
     var insideLeafX, var insideLeafY, var insideLeafZ = .{ x, y, z };
     var level = @as(usize, 3); // 2 + 1
@@ -104,14 +135,6 @@ pub fn putBlock(self: *Self, x: usize, y: usize, z: usize, block: u16) !void {
     leaf.* = .{ .full = block };
 }
 
-inline fn getPos(index: usize) @Vector(3, u32) {
-    return @Vector(3, u32){
-        @as(u32, @intCast(index % CHUNK_SIZE)),
-        @as(u32, @intCast(@divTrunc(index, CHUNK_SIZE) % CHUNK_SIZE)),
-        @as(u32, @intCast(@divTrunc(@divTrunc(index, CHUNK_SIZE), CHUNK_SIZE))),
-    };
-}
-
 pub const LeafType = enum { full, leaves };
 
 pub fn getLeaveIndex(level: usize, x: usize, y: usize, z: usize) struct {
@@ -122,6 +145,12 @@ pub fn getLeaveIndex(level: usize, x: usize, y: usize, z: usize) struct {
     const leaveIndex = .{ x / denominator, y / denominator, z / denominator };
     const leaveOffset = .{ x % denominator, y % denominator, z % denominator };
     return .{ leaveIndex, leaveOffset };
+}
+
+pub fn compact(self: *Self) void {
+    if (self.leaf == .leaves) {
+        self.leaf.compact(self.allocator);
+    }
 }
 
 const testing = std.testing;
@@ -217,7 +246,8 @@ test "expect when all putBlock then getBlock return this block" {
         }
     }
 }
-test "expect when put same block then leaves are merged" {
+
+test "expect when put same block and compact then leaves are merged" {
     const allocator = testing.allocator;
     var c: @This() = .init(allocator);
     defer c.deinit();
@@ -225,10 +255,12 @@ test "expect when put same block then leaves are merged" {
     try c.putBlock(0, 0, 0, 1);
     try c.putBlock(0, 0, 0, 0);
 
+    c.compact();
+
     try testing.expectEqualDeep(Leaf{ .full = 0 }, c.leaf);
 }
 
-test "expect when put all same block then leaves are merged" {
+test "expect when put all same block and compact then leaves are merged" {
     const allocator = testing.allocator;
     var c: @This() = .init(allocator);
     defer c.deinit();
@@ -241,5 +273,38 @@ test "expect when put all same block then leaves are merged" {
         }
     }
 
+    c.compact();
+
     try testing.expectEqualDeep(Leaf{ .full = 1 }, c.leaf);
+}
+
+test "expect when all putBlock and compact then getBlock return this block" {
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    var random = prng.random();
+
+    var c: @This() = .init(allocator);
+    defer c.deinit();
+
+    for (0..CHUNK_SIZE) |z| {
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |x| {
+                const block = random.int(u16);
+                try c.putBlock(x, y, z, block);
+            }
+        }
+    }
+
+    c.compact();
+
+    prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    random = prng.random();
+    for (0..CHUNK_SIZE) |z| {
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |x| {
+                const block = random.int(u16);
+                try testing.expectEqual(block, c.getBlock(x, y, z));
+            }
+        }
+    }
 }
